@@ -1,0 +1,6 @@
+{
+  "name": "Bomnal 아파트 갤러리",
+  "description": "대형 고화질 사진에 집중하는 Bomnal 아파트 갤러리 및 관리자 콘솔",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

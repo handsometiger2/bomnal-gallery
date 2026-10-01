@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .font-serif-luxury {
+    font-family: 'Cormorant Garamond', 'Noto Serif KR', Garamond, Georgia, serif;
+  }
+  .font-sans-luxury {
+    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+  }
+}
+
+/* Cartier Custom Polish */
+::selection {
+  background-color: #7A0016;
+  color: #FFFFFF;
+}
+
+/* Subtle luxury scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F8F6F2;
+}
+::-webkit-scrollbar-thumb {
+  background: #D4CEBE;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #7A0016;
+}
