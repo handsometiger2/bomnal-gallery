@@ -212,3 +212,36 @@ export async function syncAllApartmentsToFirestore(projects: ApartmentProject[])
     throw error;
   }
 }
+
+const SETTINGS_COL = 'settings';
+const MAIN_PAGE_DOC = 'main_page';
+
+export async function saveMainImageToFirestore(imageUrl: string): Promise<void> {
+  try {
+    const docRef = doc(db, SETTINGS_COL, MAIN_PAGE_DOC);
+    await setDoc(docRef, { mainImageUrl: imageUrl, updatedAt: Date.now() }, { merge: true });
+  } catch (error) {
+    console.error('Failed to save main image to Firestore:', error);
+    throw error;
+  }
+}
+
+export function subscribeMainImageFromFirestore(
+  onData: (url: string) => void,
+  onError?: (err: unknown) => void
+): () => void {
+  const docRef = doc(db, SETTINGS_COL, MAIN_PAGE_DOC);
+  return onSnapshot(
+    docRef,
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data && data.mainImageUrl) {
+          onData(data.mainImageUrl);
+        }
+      }
+    },
+    onError
+  );
+}
+

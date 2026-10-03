@@ -17,12 +17,16 @@ import {
 } from 'lucide-react';
 import { AdminConsoleModal } from './components/AdminConsoleModal';
 import { AdminPasswordModal } from './components/AdminPasswordModal';
+import { MainOverviewPage } from './components/MainOverviewPage';
 import { loadApartmentsFromFirestore, subscribeApartmentsFromFirestore } from './lib/firestoreService';
 
 const STORAGE_KEY = 'bomnal_apartment_gallery_v2';
 const LEGACY_STORAGE_KEY = 'bomnal_apartment_gallery';
 
 export default function App() {
+  // Navigation view mode: 'home' (메인페이지) | 'gallery' (전체화면 사진 뷰어)
+  const [currentView, setCurrentView] = useState<'home' | 'gallery'>('gallery');
+
   const [projects, setProjects] = useState<ApartmentProject[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
@@ -297,23 +301,59 @@ export default function App() {
     setPhotoIndex(0);
   };
 
-  // 비공개 진입: 좌측 상단 'Bomnal' 로고를 3번 연속 클릭하면 관리자 콘솔 오픈
+  // 좌측 상단 'BOMNAL' 로고 클릭 시 메인페이지('home')로 즉시 이동
   const handleLogoClick = () => {
-    logoClickCountRef.current += 1;
+    resetZoom();
+    setCurrentView('home');
 
+    // 관리자 비밀번호 창 단축키용 (연속 3회 클릭 시 오픈)
+    logoClickCountRef.current += 1;
     if (logoClickTimerRef.current) {
       clearTimeout(logoClickTimerRef.current);
     }
-
     if (logoClickCountRef.current >= 3) {
       logoClickCountRef.current = 0;
       setIsAdminPasswordOpen(true);
     } else {
       logoClickTimerRef.current = setTimeout(() => {
         logoClickCountRef.current = 0;
-      }, 1000);
+      }, 700);
     }
   };
+
+  if (currentView === 'home') {
+    return (
+      <div className="w-screen min-h-screen bg-[#FDFBF7]">
+        <MainOverviewPage
+          projects={projects}
+          onSelectProject={(idx) => {
+            handleSelectProject(idx);
+            setCurrentView('gallery');
+          }}
+          onOpenAdmin={() => setIsAdminPasswordOpen(true)}
+        />
+
+        {/* 관리자 비밀번호 입력 모달 */}
+        <AdminPasswordModal
+          isOpen={isAdminPasswordOpen}
+          onClose={() => setIsAdminPasswordOpen(false)}
+          onSuccess={() => {
+            setIsAdminPasswordOpen(false);
+            setIsAdminOpen(true);
+          }}
+        />
+
+        {/* 관리자 콘솔 모달 */}
+        {isAdminOpen && (
+          <AdminConsoleModal
+            projects={projects}
+            onClose={() => setIsAdminOpen(false)}
+            onUpdateProjects={handleUpdateProjects}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="relative w-screen h-screen bg-[#0A0A0A] text-white flex flex-col overflow-hidden select-none font-sans">
@@ -361,13 +401,13 @@ export default function App() {
       {/* 2. 상단 헤더 (참고 이미지 스타일: 좌측 상단 상호, 우측 상단 아파트 목록) */}
       <header className="relative z-30 w-full h-16 sm:h-20 px-6 sm:px-12 flex items-center justify-between pointer-events-auto">
         
-        {/* 좌측 상단: MØBEL 스타일의 미니멀 세리프 상호 (Bomnal) - 3회 클릭 시 관리자 비밀번호 창 */}
+        {/* 좌측 상단: BOMNAL 로고 - 클릭 시 메인페이지 이동 */}
         <div
           onClick={handleLogoClick}
-          className="flex items-center gap-2 cursor-pointer group select-none"
-          title="Bomnal"
+          className="flex items-center gap-2 cursor-pointer group select-none py-1 -ml-1 rounded"
+          title="메인페이지로 이동"
         >
-          <span className="font-serif-luxury font-bold text-lg sm:text-xl tracking-[0.28em] text-white/95 group-hover:text-white transition-colors uppercase">
+          <span className="font-serif-luxury font-bold text-lg sm:text-xl tracking-[0.28em] text-white/95 group-hover:text-white transition-colors uppercase drop-shadow-[0_1px_3px_rgba(0,0,0,0.85)]">
             BOMNAL
           </span>
         </div>
