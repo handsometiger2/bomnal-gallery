@@ -103,27 +103,45 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     setRoomPhotos(proj.roomPhotos || []);
   };
 
-  // New Apartment state
+  // New Apartment state - 완전히 빈(blank) 상태로 초기화
   const [newName, setNewName] = useState('');
-  const [newPyeong, setNewPyeong] = useState(34);
-  const [newAddress, setNewAddress] = useState('서울시');
-  const [newThumbnail, setNewThumbnail] = useState(
-    'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=80'
-  );
-  const [newRoomPhotos, setNewRoomPhotos] = useState<{ name: string; url: string }[]>([
-    {
-      name: '거실',
-      url: 'https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&w=1600&q=80',
-    },
-    {
-      name: '주방',
-      url: 'https://images.unsplash.com/photo-1556911220-e15b29be8c8f?auto=format&fit=crop&w=1600&q=80',
-    },
-    {
-      name: '욕실',
-      url: 'https://images.unsplash.com/photo-1552321554-5fefe8c9ef14?auto=format&fit=crop&w=1600&q=80',
-    },
-  ]);
+  const [newPyeong, setNewPyeong] = useState<number | ''>('');
+  const [newAddress, setNewAddress] = useState('');
+  const [newThumbnail, setNewThumbnail] = useState('');
+  const [newRoomPhotos, setNewRoomPhotos] = useState<{ name: string; url: string }[]>([]);
+
+  // 신규 아파트 폼 초기화 함수
+  const resetNewProjectForm = () => {
+    setNewName('');
+    setNewPyeong('');
+    setNewAddress('');
+    setNewThumbnail('');
+    setNewRoomPhotos([]);
+  };
+
+  // '추가' 탭 전환 시 신규 폼을 완전히 깨끗한 블랭크 상태로 리셋
+  const handleSwitchToAddTab = () => {
+    resetNewProjectForm();
+    setActiveTab('add');
+  };
+
+  // 편집 중인 아파트의 모든 추가 사진 일괄 삭제
+  const handleClearAllRoomPhotos = () => {
+    if (roomPhotos.length === 0) return;
+    if (confirm(`등록된 추가 사진 ${roomPhotos.length}장을 모두 삭제하시겠습니까?`)) {
+      setRoomPhotos([]);
+      setSaveMessage('추가 사진이 모두 삭제되었습니다. [저장]을 눌러 클라우드에 반영하세요.');
+      setTimeout(() => setSaveMessage(null), 3500);
+    }
+  };
+
+  // 신규 아파트 등록 시 추가 사진 일괄 삭제
+  const handleClearAllNewRoomPhotos = () => {
+    if (newRoomPhotos.length === 0) return;
+    if (confirm(`등록된 사진 ${newRoomPhotos.length}장을 모두 삭제하시겠습니까?`)) {
+      setNewRoomPhotos([]);
+    }
+  };
 
   // Save changes to current project (Both State & Cloud Firestore)
   const handleSaveEdit = async () => {
@@ -338,24 +356,27 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     }
 
     setIsSaving(true);
+    const validPyeong = Number(newPyeong) || 34;
+    const finalThumb = newThumbnail.trim() || (newRoomPhotos[0]?.url) || 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=80';
+
     const newProject: ApartmentProject = {
       id: `bomnal-${Date.now()}`,
       complexName: newName,
       subTitle: `${newName} 프리미엄 리모델링`,
-      address: newAddress,
-      pyeong: newPyeong,
-      squareMeters: Math.round(newPyeong * 2.5),
+      address: newAddress || '대구광역시',
+      pyeong: validPyeong,
+      squareMeters: Math.round(validPyeong * 2.5),
       style: '모던 미니멀',
       costMillionWon: 6000,
       durationWeeks: 4,
       completionDate: '2026.03',
-      thumbnailUrl: newThumbnail,
+      thumbnailUrl: finalThumb,
       beforeAfter: {
         title: `${newName} 시공 전·후`,
         roomType: 'living',
-        beforeImageUrl: newThumbnail,
+        beforeImageUrl: finalThumb,
         beforeDescription: '시공 전',
-        afterImageUrl: newThumbnail,
+        afterImageUrl: finalThumb,
         afterDescription: '시공 후',
       },
       roomPhotos: newRoomPhotos.map((item, idx) => ({
@@ -454,7 +475,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
               </span>
               <button
                 type="button"
-                onClick={() => setActiveTab('add')}
+                onClick={handleSwitchToAddTab}
                 className={`text-xs px-2.5 py-1 flex items-center gap-1 font-semibold transition-colors ${
                   activeTab === 'add'
                     ? 'bg-[#7A0016] text-white'
@@ -687,6 +708,19 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                         <Plus className="w-3.5 h-3.5" />
                         <span>직접 추가</span>
                       </button>
+
+                      {/* 사진 전체 삭제 버튼 */}
+                      {roomPhotos.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleClearAllRoomPhotos}
+                          className="text-xs px-2.5 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 transition-colors flex items-center gap-1 font-semibold rounded-xs"
+                          title="추가 사진 전체 일괄 삭제"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>전체 삭제</span>
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -802,14 +836,22 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                     대표 사진
                   </label>
                   <div className="flex gap-4 items-start">
-                    <img
-                      src={newThumbnail}
-                      alt="대표"
-                      className="w-32 h-20 object-cover border border-[#E8E4DF] shrink-0"
-                    />
+                    {newThumbnail ? (
+                      <img
+                        src={newThumbnail}
+                        alt="대표"
+                        className="w-32 h-20 object-cover border border-[#E8E4DF] shrink-0"
+                      />
+                    ) : (
+                      <div className="w-32 h-20 bg-neutral-100 border border-dashed border-[#D8D2C7] flex flex-col items-center justify-center text-neutral-400 shrink-0">
+                        <Upload className="w-4 h-4 mb-1" />
+                        <span className="text-[10px]">사진 없음</span>
+                      </div>
+                    )}
                     <div className="flex-1 space-y-2">
                       <input
                         type="text"
+                        placeholder="대표 이미지 URL (또는 아래 파일 선택)"
                         value={newThumbnail}
                         onChange={(e) => setNewThumbnail(e.target.value)}
                         className="w-full px-3 py-1.5 border border-[#E8E4DF] text-xs outline-none"
@@ -840,22 +882,36 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                       </p>
                     </div>
 
-                    <label className="text-xs px-3 py-1.5 bg-[#7A0016] hover:bg-[#600011] text-white transition-colors flex items-center gap-1.5 font-semibold cursor-pointer rounded-xs shadow-xs">
-                      {isBulkUploading ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <Images className="w-3.5 h-3.5" />
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs px-3 py-1.5 bg-[#7A0016] hover:bg-[#600011] text-white transition-colors flex items-center gap-1.5 font-semibold cursor-pointer rounded-xs shadow-xs">
+                        {isBulkUploading ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Images className="w-3.5 h-3.5" />
+                        )}
+                        <span>{isBulkUploading ? '사진 처리 중...' : '여러 장 한번에 올리기'}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          disabled={isBulkUploading}
+                          onChange={handleBulkPhotosUploadForNew}
+                          className="hidden"
+                        />
+                      </label>
+
+                      {newRoomPhotos.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleClearAllNewRoomPhotos}
+                          className="text-xs px-2.5 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 transition-colors flex items-center gap-1 font-semibold rounded-xs"
+                          title="신규 등록 사진 전체 삭제"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>전체 삭제</span>
+                        </button>
                       )}
-                      <span>{isBulkUploading ? '사진 처리 중...' : '여러 장 한번에 올리기'}</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        disabled={isBulkUploading}
-                        onChange={handleBulkPhotosUploadForNew}
-                        className="hidden"
-                      />
-                    </label>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-1 bg-[#FBFBFB] border border-[#E8E4DF]">

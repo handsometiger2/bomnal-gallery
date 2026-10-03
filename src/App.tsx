@@ -6,7 +6,15 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { INITIAL_PORTFOLIOS } from './data/mockPortfolios';
 import { ApartmentProject } from './types';
-import { ChevronLeft, ChevronRight, Maximize, Minimize } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Maximize,
+  Minimize,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw
+} from 'lucide-react';
 import { AdminConsoleModal } from './components/AdminConsoleModal';
 import { AdminPasswordModal } from './components/AdminPasswordModal';
 import { loadApartmentsFromFirestore } from './lib/firestoreService';
@@ -33,10 +41,75 @@ export default function App() {
   const [photoIndex, setPhotoIndex] = useState<number>(0);
   const [isAdminPasswordOpen, setIsAdminPasswordOpen] = useState<boolean>(false);
   const [isAdminOpen, setIsAdminOpen] = useState<boolean>(false);
-  const [isExpandedFit, setIsExpandedFit] = useState<boolean>(false); // false: contain (전체 원본 비율), true: fill/cover (여백 없이 꽉 채우기)
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+
+  // Zoom & Pan state for original aspect-ratio image inspection
+  const [zoomScale, setZoomScale] = useState<number>(1);
+  const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const currentOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
   const logoClickCountRef = useRef<number>(0);
   const logoClickTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Reset zoom & pan whenever the photo or project changes
+  const resetZoom = useCallback(() => {
+    setZoomScale(1);
+    setPanOffset({ x: 0, y: 0 });
+    currentOffsetRef.current = { x: 0, y: 0 };
+  }, []);
+
+  const handleZoomIn = () => {
+    setZoomScale((prev) => Math.min(prev + 0.25, 4));
+  };
+
+  const handleZoomOut = () => {
+    setZoomScale((prev) => {
+      const next = Math.max(prev - 0.25, 0.5);
+      if (next <= 1) {
+        setPanOffset({ x: 0, y: 0 });
+        currentOffsetRef.current = { x: 0, y: 0 };
+      }
+      return next;
+    });
+  };
+
+  // Mouse wheel zoom
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    if (e.deltaY < 0) {
+      setZoomScale((prev) => Math.min(prev + 0.15, 4));
+    } else {
+      setZoomScale((prev) => {
+        const next = Math.max(prev - 0.15, 0.5);
+        if (next <= 1) {
+          setPanOffset({ x: 0, y: 0 });
+          currentOffsetRef.current = { x: 0, y: 0 };
+        }
+        return next;
+      });
+    }
+  };
+
+  // Mouse Drag to Pan when zoomed
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (zoomScale <= 1) return;
+    setIsDragging(true);
+    dragStartRef.current = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y };
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging) return;
+    const newX = e.clientX - dragStartRef.current.x;
+    const newY = e.clientY - dragStartRef.current.y;
+    setPanOffset({ x: newX, y: newY });
+    currentOffsetRef.current = { x: newX, y: newY };
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
 
   // Fullscreen change listener
   useEffect(() => {
@@ -111,12 +184,14 @@ export default function App() {
   const totalPhotos = allPhotos.length;
 
   const handlePrev = useCallback(() => {
+    resetZoom();
     setPhotoIndex((prev) => (prev > 0 ? prev - 1 : totalPhotos - 1));
-  }, [totalPhotos]);
+  }, [totalPhotos, resetZoom]);
 
   const handleNext = useCallback(() => {
+    resetZoom();
     setPhotoIndex((prev) => (prev < totalPhotos - 1 ? prev + 1 : 0));
-  }, [totalPhotos]);
+  }, [totalPhotos, resetZoom]);
 
   // Robust Global Keydown Handler
   useEffect(() => {
@@ -162,6 +237,12 @@ export default function App() {
       } else if (e.key === 'ArrowRight' || e.code === 'ArrowRight') {
         e.preventDefault();
         handleNext();
+      } else if (e.key === '+' || e.key === '=') {
+        handleZoomIn();
+      } else if (e.key === '-' || e.key === '_') {
+        handleZoomOut();
+      } else if (e.key === '0') {
+        resetZoom();
       }
     };
 
@@ -177,6 +258,7 @@ export default function App() {
 
   // Reset photo index when switching apartment
   const handleSelectProject = (idx: number) => {
+    resetZoom();
     setCurrentProjectIndex(idx);
     setPhotoIndex(0);
   };
@@ -202,18 +284,36 @@ export default function App() {
   return (
     <div className="relative w-screen h-screen bg-[#0A0A0A] text-white flex flex-col overflow-hidden select-none font-sans">
       
-      {/* 1. 배경 초대형 풀스크린 사진 (화면 전체 100% 채움) */}
-      <div className="absolute inset-0 w-full h-full overflow-hidden z-0">
-        <img
-          key={currentPhoto.url}
-          src={currentPhoto.url}
-          alt=""
-          className={`w-full h-full select-none transition-all duration-700 ease-out ${
-            isExpandedFit ? 'object-cover' : 'object-cover sm:object-cover'
-          }`}
-        />
-        {/* 건축적 깊이감을 주는 미세한 비네팅 및 상하단 텍스트 가독성 그래디언트 */}
-        <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/70 pointer-events-none" />
+      {/* 1. 사진 뷰어 영역 (사진의 원래 비율 object-contain 유지, 마우스 휠 및 드래그 확대/축소 가능) */}
+      <div
+        className="absolute inset-0 w-full h-full overflow-hidden z-0 flex items-center justify-center cursor-default"
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        style={{
+          cursor: zoomScale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default',
+        }}
+      >
+        <div
+          className="w-full h-full flex items-center justify-center transition-transform duration-100 ease-out select-none"
+          style={{
+            transform: `translate3d(${panOffset.x}px, ${panOffset.y}px, 0) scale(${zoomScale})`,
+            transformOrigin: 'center center',
+          }}
+        >
+          <img
+            key={currentPhoto.url}
+            src={currentPhoto.url}
+            alt=""
+            draggable={false}
+            className="max-w-full max-h-full object-contain select-none pointer-events-none drop-shadow-2xl"
+          />
+        </div>
+
+        {/* 미세한 상하단 비네팅 (텍스트 가독성 확보) */}
+        <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/60 pointer-events-none" />
       </div>
 
       {/* 2. 상단 헤더 (참고 이미지 스타일: 좌측 상단 상호, 우측 상단 아파트 목록) */}
@@ -254,6 +354,48 @@ export default function App() {
           })}
 
           <div className="h-3 w-px bg-white/20 hidden sm:block ml-1" />
+
+          {/* 사진 확대 / 축소 / 리셋 컨트롤 */}
+          <div className="flex items-center gap-1 bg-black/40 backdrop-blur-md px-1.5 py-0.5 rounded border border-white/10">
+            <button
+              type="button"
+              onClick={handleZoomOut}
+              disabled={zoomScale <= 0.5}
+              className="p-1 text-white/70 hover:text-white disabled:opacity-30 transition-colors cursor-pointer"
+              title="축소 (휠 아래로)"
+            >
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={resetZoom}
+              className="px-1 text-[10px] font-mono text-white/80 hover:text-white transition-colors cursor-pointer"
+              title="배율 초기화 (100%)"
+            >
+              {Math.round(zoomScale * 100)}%
+            </button>
+            <button
+              type="button"
+              onClick={handleZoomIn}
+              disabled={zoomScale >= 4}
+              className="p-1 text-white/70 hover:text-white disabled:opacity-30 transition-colors cursor-pointer"
+              title="확대 (휠 위로)"
+            >
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+            {zoomScale !== 1 && (
+              <button
+                type="button"
+                onClick={resetZoom}
+                className="p-1 text-[#E03B52] hover:text-white transition-colors cursor-pointer ml-0.5"
+                title="원본 크기로 복원"
+              >
+                <RotateCcw className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+
+          <div className="h-3 w-px bg-white/20 hidden sm:block ml-0.5" />
 
           {/* 전체화면 토글 */}
           <button
