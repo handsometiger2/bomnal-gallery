@@ -22,8 +22,8 @@ import {
 } from '../lib/firestoreService';
 import { getStoredAdminPassword, setStoredAdminPassword } from './AdminPasswordModal';
 
-// Helper to compress images so Firestore and memory stay fast and reliable
-const compressImageFile = (file: File, maxDim = 1920, quality = 0.82): Promise<string> => {
+// Helper to compress images so Firestore document size limit (1MB) is never exceeded
+const compressImageFile = (file: File, maxDim = 1280, quality = 0.70): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = reject;
@@ -87,8 +87,6 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
 
   // Edit form state
   const [complexName, setComplexName] = useState<string>(currentProject?.complexName || '');
-  const [pyeong, setPyeong] = useState<number>(currentProject?.pyeong || 34);
-  const [address, setAddress] = useState<string>(currentProject?.address || '');
   const [thumbnailUrl, setThumbnailUrl] = useState<string>(currentProject?.thumbnailUrl || '');
   const [roomPhotos, setRoomPhotos] = useState<RoomPhoto[]>(currentProject?.roomPhotos || []);
 
@@ -97,24 +95,18 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     setSelectedProjectId(proj.id);
     setActiveTab('edit');
     setComplexName(proj.complexName);
-    setPyeong(proj.pyeong);
-    setAddress(proj.address);
     setThumbnailUrl(proj.thumbnailUrl);
     setRoomPhotos(proj.roomPhotos || []);
   };
 
-  // New Apartment state - 완전히 빈(blank) 상태로 초기화
+  // New Apartment state - 완전히 빈(blank) 상태로 초기화 (평형/주소 입력 필드 제거)
   const [newName, setNewName] = useState('');
-  const [newPyeong, setNewPyeong] = useState<number | ''>('');
-  const [newAddress, setNewAddress] = useState('');
   const [newThumbnail, setNewThumbnail] = useState('');
   const [newRoomPhotos, setNewRoomPhotos] = useState<{ name: string; url: string }[]>([]);
 
   // 신규 아파트 폼 초기화 함수
   const resetNewProjectForm = () => {
     setNewName('');
-    setNewPyeong('');
-    setNewAddress('');
     setNewThumbnail('');
     setNewRoomPhotos([]);
   };
@@ -152,8 +144,6 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     const target = {
       ...currentProject,
       complexName,
-      pyeong,
-      address,
       thumbnailUrl,
       roomPhotos,
     };
@@ -163,13 +153,15 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
 
     try {
       await saveApartmentToFirestore(target);
-      setSaveMessage('클라우드 영구 저장소에 안전하게 저장되었습니다.');
-    } catch (err) {
-      console.error(err);
-      setSaveMessage('로컬에는 저장되었으나 클라우드 동기화 중 오류가 발생했습니다.');
+      setSaveMessage('✓ 클라우드 DB에 실시간 저장 완료! (다른 기기에서도 즉시 동기화됩니다)');
+    } catch (err: unknown) {
+      console.error('Firestore save failed:', err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setSaveMessage(`클라우드 전송 실패: ${errMsg}`);
+      alert(`클라우드 저장 실패 안내: ${errMsg}\n(사진 파일 용량이 너무 크거나 인터넷 연결을 확인해주세요)`);
     } finally {
       setIsSaving(false);
-      setTimeout(() => setSaveMessage(null), 3000);
+      setTimeout(() => setSaveMessage(null), 4000);
     }
   };
 
@@ -231,7 +223,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const result = await compressImageFile(file, 1920, 0.85);
+      const result = await compressImageFile(file, 1280, 0.70);
       if (isNew) setNewThumbnail(result);
       else setThumbnailUrl(result);
     } catch {
@@ -250,7 +242,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const result = await compressImageFile(file, 1920, 0.85);
+      const result = await compressImageFile(file, 1280, 0.70);
       handleUpdatePhoto(photoId, 'url', result);
     } catch {
       const reader = new FileReader();
@@ -276,7 +268,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
-        const compressedUrl = await compressImageFile(file, 1920, 0.82);
+        const compressedUrl = await compressImageFile(file, 1280, 0.70);
         newAddedPhotos.push({
           id: `photo-${baseTime}-${i}`,
           roomType: 'living',
@@ -311,7 +303,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
-        const compressedUrl = await compressImageFile(file, 1920, 0.82);
+        const compressedUrl = await compressImageFile(file, 1280, 0.70);
         newItems.push({
           name: '', // 파일명을 넣지 않고 빈 상태로 생성
           url: compressedUrl,
@@ -347,7 +339,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     }
   };
 
-  // Create new apartment (Both State & Cloud Firestore)
+  // Create new apartment (Both State & Cloud Firestore) - 평형, 주소 입력 없이 단지명과 사진으로만 등록
   const handleCreateNewProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName.trim()) {
@@ -356,20 +348,19 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     }
 
     setIsSaving(true);
-    const validPyeong = Number(newPyeong) || 34;
     const finalThumb = newThumbnail.trim() || (newRoomPhotos[0]?.url) || 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=80';
 
     const newProject: ApartmentProject = {
       id: `bomnal-${Date.now()}`,
       complexName: newName,
-      subTitle: `${newName} 프리미엄 리모델링`,
-      address: newAddress || '대구광역시',
-      pyeong: validPyeong,
-      squareMeters: Math.round(validPyeong * 2.5),
+      subTitle: `${newName} 인테리어 포트폴리오`,
+      address: '',
+      pyeong: 0,
+      squareMeters: 0,
       style: '모던 미니멀',
-      costMillionWon: 6000,
+      costMillionWon: 0,
       durationWeeks: 4,
-      completionDate: '2026.03',
+      completionDate: '2026',
       thumbnailUrl: finalThumb,
       beforeAfter: {
         title: `${newName} 시공 전·후`,
@@ -396,7 +387,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
         kitchen: '대면형 아일랜드',
         bathroom: '졸리컷 포세린 타일',
       },
-      agentNote: '신축급 하이엔드 인테리어',
+      agentNote: '',
     };
 
     const updated = [...projects, newProject];
@@ -407,12 +398,14 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
 
     try {
       await saveApartmentToFirestore(newProject);
-      setSaveMessage('새 아파트가 클라우드에 성공적으로 등록되었습니다.');
-    } catch (err) {
-      console.error(err);
+      setSaveMessage('✓ 새 아파트 및 사진이 클라우드 DB에 안전하게 등록되었습니다.');
+    } catch (err: unknown) {
+      console.error('Firestore save failed:', err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      alert(`클라우드 등록 실패: ${errMsg}\n(사진 용량 또는 네트워크 연결을 확인해주세요)`);
     } finally {
       setIsSaving(false);
-      setTimeout(() => setSaveMessage(null), 3000);
+      setTimeout(() => setSaveMessage(null), 4000);
     }
   };
 
@@ -505,7 +498,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                         {p.complexName}
                       </div>
                       <div className="text-[11px] text-[#8C8275]">
-                        {p.pyeong}평형 · 사진 {1 + (p.roomPhotos?.length || 0)}장
+                        사진 {1 + (p.roomPhotos?.length || 0)}장
                       </div>
                     </div>
                     {isSelected && (
@@ -526,44 +519,75 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
               })}
             </div>
 
-            {/* 관리자 비밀번호 변경 영역 */}
-            <div className="p-3 border-t border-[#E8E4DF] bg-white">
-              <div className="text-[11px] font-bold text-[#141414] mb-1.5 flex items-center gap-1">
-                <KeyRound className="w-3.5 h-3.5 text-[#7A0016]" />
-                <span>관리자 비밀번호 설정</span>
+            {/* 관리자 비밀번호 변경 및 데이터 복원 영역 */}
+            <div className="p-3 border-t border-[#E8E4DF] bg-white space-y-3">
+              <div>
+                <div className="text-[11px] font-bold text-[#141414] mb-1.5 flex items-center gap-1">
+                  <KeyRound className="w-3.5 h-3.5 text-[#7A0016]" />
+                  <span>관리자 비밀번호 설정</span>
+                </div>
+                <div className="flex gap-1.5">
+                  <input
+                    type="password"
+                    value={adminPwdInput}
+                    onChange={(e) => {
+                      setAdminPwdInput(e.target.value);
+                      setAdminPwdSaved(false);
+                    }}
+                    placeholder="새 비밀번호 입력"
+                    className="w-full px-2 py-1 text-xs border border-[#E8E4DF] rounded outline-none focus:border-[#7A0016]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!adminPwdInput.trim()) {
+                        alert('비밀번호를 입력해주세요.');
+                        return;
+                      }
+                      setStoredAdminPassword(adminPwdInput.trim());
+                      setAdminPwdSaved(true);
+                      setTimeout(() => setAdminPwdSaved(false), 2500);
+                    }}
+                    className="px-2.5 py-1 bg-[#141414] hover:bg-[#7A0016] text-white text-xs rounded transition-colors shrink-0"
+                  >
+                    {adminPwdSaved ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : '저장'}
+                  </button>
+                </div>
+                {adminPwdSaved && (
+                  <p className="text-[10px] text-emerald-600 font-medium mt-1">
+                    비밀번호가 안전하게 변경되었습니다.
+                  </p>
+                )}
               </div>
-              <div className="flex gap-1.5">
-                <input
-                  type="password"
-                  value={adminPwdInput}
-                  onChange={(e) => {
-                    setAdminPwdInput(e.target.value);
-                    setAdminPwdSaved(false);
-                  }}
-                  placeholder="새 비밀번호 입력"
-                  className="w-full px-2 py-1 text-xs border border-[#E8E4DF] rounded outline-none focus:border-[#7A0016]"
-                />
+
+              {/* 기본 포트폴리오 데이터 전체 복원 버튼 */}
+              <div className="pt-2 border-t border-[#F0ECE6]">
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!adminPwdInput.trim()) {
-                      alert('비밀번호를 입력해주세요.');
-                      return;
+                  onClick={async () => {
+                    if (confirm('모든 기본 아파트(e편한세상월배 등)와 고화질 시공 사진들을 원본 상태로 복원하시겠습니까?')) {
+                      setIsSaving(true);
+                      try {
+                        await syncAllApartmentsToFirestore(INITIAL_PORTFOLIOS);
+                        onUpdateProjects(INITIAL_PORTFOLIOS);
+                        setSelectedProjectId(INITIAL_PORTFOLIOS[0].id);
+                        handleSelectProjectToEdit(INITIAL_PORTFOLIOS[0]);
+                        alert('기본 포트폴리오 및 시공 사진들이 완벽하게 복원되었습니다.');
+                      } catch (e) {
+                        console.error(e);
+                        onUpdateProjects(INITIAL_PORTFOLIOS);
+                        alert('로컬에 포트폴리오가 복원되었습니다.');
+                      } finally {
+                        setIsSaving(false);
+                      }
                     }
-                    setStoredAdminPassword(adminPwdInput.trim());
-                    setAdminPwdSaved(true);
-                    setTimeout(() => setAdminPwdSaved(false), 2500);
                   }}
-                  className="px-2.5 py-1 bg-[#141414] hover:bg-[#7A0016] text-white text-xs rounded transition-colors shrink-0"
+                  className="w-full py-1.5 px-2 bg-[#F5F2EB] hover:bg-[#EAE4D9] text-[#7A0016] hover:text-[#5A0010] text-[11px] font-semibold rounded border border-[#D8D2C7] transition-colors flex items-center justify-center gap-1.5"
                 >
-                  {adminPwdSaved ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : '저장'}
+                  <RotateCcw className="w-3 h-3" />
+                  <span>기본 포트폴리오 사진 전체 복원</span>
                 </button>
               </div>
-              {adminPwdSaved && (
-                <p className="text-[10px] text-emerald-600 font-medium mt-1">
-                  비밀번호가 안전하게 변경되었습니다.
-                </p>
-              )}
             </div>
           </div>
 
@@ -593,8 +617,15 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                   </button>
                 </div>
 
+                {saveMessage && (
+                  <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded font-medium flex items-center gap-2">
+                    <Cloud className="w-4 h-4 text-[#7A0016] shrink-0" />
+                    <span>{saveMessage}</span>
+                  </div>
+                )}
+
                 {/* Info Fields */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-[#FAF8F5] p-4 rounded border border-[#EFEAE2]">
+                <div className="bg-[#FAF8F5] p-4 rounded border border-[#EFEAE2]">
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-[#7A0016] mb-1.5 flex items-center justify-between">
                       <span>아파트 단지명 (이름 변경)</span>
@@ -606,31 +637,6 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                       placeholder="예: e편한세상월배, 월배아이파크..."
                       onChange={(e) => setComplexName(e.target.value)}
                       className="w-full px-3.5 py-2.5 bg-white border border-[#D8D2C7] focus:border-[#7A0016] focus:ring-1 focus:ring-[#7A0016] text-sm font-semibold text-[#141414] outline-none shadow-2xs transition-all"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-[#6E6E6E] mb-1.5">
-                      평형 (공급평수)
-                    </label>
-                    <input
-                      type="number"
-                      value={pyeong}
-                      onChange={(e) => setPyeong(Number(e.target.value))}
-                      className="w-full px-3.5 py-2.5 bg-white border border-[#D8D2C7] focus:border-[#141414] text-sm outline-none shadow-2xs transition-all"
-                    />
-                  </div>
-
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-bold uppercase tracking-wider text-[#6E6E6E] mb-1.5">
-                      위치 (주소)
-                    </label>
-                    <input
-                      type="text"
-                      value={address}
-                      placeholder="예: 대구광역시 달서구 월성동"
-                      onChange={(e) => setAddress(e.target.value)}
-                      className="w-full px-3.5 py-2.5 bg-white border border-[#D8D2C7] focus:border-[#141414] text-sm outline-none shadow-2xs transition-all"
                     />
                   </div>
                 </div>
@@ -789,45 +795,19 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-[#6E6E6E] mb-1">
-                      아파트 단지명 *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="예: 압구정 현대, 아크로리버파크"
-                      value={newName}
-                      onChange={(e) => setNewName(e.target.value)}
-                      className="w-full px-3 py-2 border border-[#E8E4DF] focus:border-[#141414] text-sm outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-[#6E6E6E] mb-1">
-                      평형 *
-                    </label>
-                    <input
-                      type="number"
-                      required
-                      value={newPyeong}
-                      onChange={(e) => setNewPyeong(Number(e.target.value))}
-                      className="w-full px-3 py-2 border border-[#E8E4DF] focus:border-[#141414] text-sm outline-none"
-                    />
-                  </div>
-
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-bold uppercase tracking-wider text-[#6E6E6E] mb-1">
-                      위치
-                    </label>
-                    <input
-                      type="text"
-                      value={newAddress}
-                      onChange={(e) => setNewAddress(e.target.value)}
-                      className="w-full px-3 py-2 border border-[#E8E4DF] focus:border-[#141414] text-sm outline-none"
-                    />
-                  </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-[#7A0016] mb-1.5 flex items-center justify-between">
+                    <span>아파트 단지명 *</span>
+                    <span className="text-[10px] font-normal text-[#8C8275]">상단 갤러리 탭에 표시될 이름</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="예: e편한세상월배, 월배아이파크..."
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-white border border-[#D8D2C7] focus:border-[#7A0016] focus:ring-1 focus:ring-[#7A0016] text-sm font-semibold text-[#141414] outline-none shadow-2xs transition-all"
+                  />
                 </div>
 
                 {/* Main photo */}

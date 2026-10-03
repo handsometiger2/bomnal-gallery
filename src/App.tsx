@@ -17,14 +17,15 @@ import {
 } from 'lucide-react';
 import { AdminConsoleModal } from './components/AdminConsoleModal';
 import { AdminPasswordModal } from './components/AdminPasswordModal';
-import { loadApartmentsFromFirestore } from './lib/firestoreService';
+import { loadApartmentsFromFirestore, subscribeApartmentsFromFirestore } from './lib/firestoreService';
 
 const STORAGE_KEY = 'bomnal_apartment_gallery_v2';
+const LEGACY_STORAGE_KEY = 'bomnal_apartment_gallery';
 
 export default function App() {
   const [projects, setProjects] = useState<ApartmentProject[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -130,12 +131,11 @@ export default function App() {
     }
   };
 
-  // Load from Cloud Firestore on initial load
+  // Real-time live synchronization with Cloud Firestore
   useEffect(() => {
-    let isMounted = true;
-    loadApartmentsFromFirestore()
-      .then((cloudProjects) => {
-        if (isMounted && cloudProjects && cloudProjects.length > 0) {
+    const unsubscribe = subscribeApartmentsFromFirestore(
+      (cloudProjects) => {
+        if (cloudProjects && cloudProjects.length > 0) {
           setProjects(cloudProjects);
           try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudProjects));
@@ -143,12 +143,17 @@ export default function App() {
             // ignore
           }
         }
-      })
-      .catch((err) => {
-        console.warn('Cloud sync on load failed, using local cache:', err);
-      });
+      },
+      (err) => {
+        console.warn('Real-time Firestore listener error, fallback to initial/local load:', err);
+        loadApartmentsFromFirestore().then((res) => {
+          if (res && res.length > 0) setProjects(res);
+        }).catch(() => {});
+      }
+    );
+
     return () => {
-      isMounted = false;
+      unsubscribe();
     };
   }, []);
 
@@ -168,16 +173,24 @@ export default function App() {
 
   const currentProject = projects[currentProjectIndex] || projects[0];
 
-  // All photos for the currently selected apartment
-  const allPhotos = [
+  // All photos for the currently selected apartment (empty/blank url filter)
+  const rawPhotos = [
+    ...(currentProject.thumbnailUrl
+      ? [{ id: `${currentProject.id}-main`, url: currentProject.thumbnailUrl }]
+      : []),
+    ...(currentProject.roomPhotos || [])
+      .filter((r) => Boolean(r && r.imageUrl && r.imageUrl.trim()))
+      .map((r) => ({
+        id: r.id,
+        url: r.imageUrl,
+      })),
+  ];
+
+  const allPhotos = rawPhotos.length > 0 ? rawPhotos : [
     {
-      id: `${currentProject.id}-main`,
-      url: currentProject.thumbnailUrl,
-    },
-    ...(currentProject.roomPhotos || []).map((r) => ({
-      id: r.id,
-      url: r.imageUrl,
-    })),
+      id: `${currentProject.id}-empty`,
+      url: currentProject.thumbnailUrl || 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=80',
+    }
   ];
 
   const currentPhoto = allPhotos[photoIndex] || allPhotos[0];
@@ -286,7 +299,7 @@ export default function App() {
       
       {/* 1. 사진 뷰어 영역 (사진의 원래 비율 object-contain 유지, 마우스 휠 및 드래그 확대/축소 가능) */}
       <div
-        className="absolute inset-0 w-full h-full overflow-hidden z-0 flex items-center justify-center cursor-default"
+        className="absolute inset-0 w-full h-full overflow-hidden z-0 flex items-center justify-center cursor-default bg-black"
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -297,19 +310,27 @@ export default function App() {
         }}
       >
         <div
-          className="w-full h-full flex items-center justify-center transition-transform duration-100 ease-out select-none"
+          className="w-full h-full flex items-center justify-center transition-transform duration-100 ease-out select-none p-4 sm:p-10"
           style={{
             transform: `translate3d(${panOffset.x}px, ${panOffset.y}px, 0) scale(${zoomScale})`,
             transformOrigin: 'center center',
           }}
         >
-          <img
-            key={currentPhoto.url}
-            src={currentPhoto.url}
-            alt=""
-            draggable={false}
-            className="max-w-full max-h-full object-contain select-none pointer-events-none drop-shadow-2xl"
-          />
+          {currentPhoto?.url ? (
+            <img
+              key={currentPhoto.url}
+              src={currentPhoto.url}
+              alt={currentProject.complexName || '인테리어 포트폴리오'}
+              draggable={false}
+              className="w-auto h-auto max-w-full max-h-full object-contain select-none pointer-events-none drop-shadow-2xl"
+              onError={(e) => {
+                // 이미지 로드 실패 시 고화질 기본 인테리어 사진으로 자동 대체
+                (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=80';
+              }}
+            />
+          ) : (
+            <div className="text-white/40 text-sm">등록된 사진이 없습니다.</div>
+          )}
         </div>
 
         {/* 미세한 상하단 비네팅 (텍스트 가독성 확보) */}
