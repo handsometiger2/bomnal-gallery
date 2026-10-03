@@ -11,7 +11,8 @@ import {
   CheckCircle2,
   Loader2,
   KeyRound,
-  Check
+  Check,
+  Images
 } from 'lucide-react';
 import { INITIAL_PORTFOLIOS } from '../data/mockPortfolios';
 import {
@@ -20,6 +21,44 @@ import {
   syncAllApartmentsToFirestore
 } from '../lib/firestoreService';
 import { getStoredAdminPassword, setStoredAdminPassword } from './AdminPasswordModal';
+
+// Helper to compress images so Firestore and memory stay fast and reliable
+const compressImageFile = (file: File, maxDim = 1920, quality = 0.82): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(e.target?.result as string);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(dataUrl);
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+};
 
 interface AdminConsoleModalProps {
   projects: ApartmentProject[];
@@ -143,7 +182,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     const newP: RoomPhoto = {
       id: `photo-${Date.now()}`,
       roomType: 'living',
-      roomNameKo: '추가 공간',
+      roomNameKo: '',
       title: `${complexName} 사진`,
       description: '',
       imageUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=80',
@@ -169,28 +208,108 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     );
   };
 
-  // Handle image upload from computer
-  const handleFileUploadForThumbnail = (e: React.ChangeEvent<HTMLInputElement>, isNew = false) => {
+  // Handle image upload from computer (single thumbnail)
+  const handleFileUploadForThumbnail = async (e: React.ChangeEvent<HTMLInputElement>, isNew = false) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (uploadEvent) => {
-      const result = uploadEvent.target?.result as string;
+    try {
+      const result = await compressImageFile(file, 1920, 0.85);
       if (isNew) setNewThumbnail(result);
       else setThumbnailUrl(result);
-    };
-    reader.readAsDataURL(file);
+    } catch {
+      const reader = new FileReader();
+      reader.onload = (uploadEvent) => {
+        const result = uploadEvent.target?.result as string;
+        if (isNew) setNewThumbnail(result);
+        else setThumbnailUrl(result);
+      };
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
   };
 
-  const handleFileUploadForPhoto = (e: React.ChangeEvent<HTMLInputElement>, photoId: string) => {
+  const handleFileUploadForPhoto = async (e: React.ChangeEvent<HTMLInputElement>, photoId: string) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (uploadEvent) => {
-      const result = uploadEvent.target?.result as string;
+    try {
+      const result = await compressImageFile(file, 1920, 0.85);
       handleUpdatePhoto(photoId, 'url', result);
-    };
-    reader.readAsDataURL(file);
+    } catch {
+      const reader = new FileReader();
+      reader.onload = (uploadEvent) => {
+        const result = uploadEvent.target?.result as string;
+        handleUpdatePhoto(photoId, 'url', result);
+      };
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
+  };
+
+  // Handle multiple files upload at once for current editing project
+  const [isBulkUploading, setIsBulkUploading] = useState<boolean>(false);
+  const handleBulkPhotosUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
+    setIsBulkUploading(true);
+    const newAddedPhotos: RoomPhoto[] = [];
+    const baseTime = Date.now();
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        const compressedUrl = await compressImageFile(file, 1920, 0.82);
+        newAddedPhotos.push({
+          id: `photo-${baseTime}-${i}`,
+          roomType: 'living',
+          roomNameKo: '', // 파일명을 넣지 않고 빈 상태로 생성
+          title: `${complexName} 사진`,
+          description: '',
+          imageUrl: compressedUrl,
+          highlights: [],
+        });
+      } catch (err) {
+        console.error('Error reading file:', file.name, err);
+      }
+    }
+
+    if (newAddedPhotos.length > 0) {
+      setRoomPhotos((prev) => [...prev, ...newAddedPhotos]);
+      setSaveMessage(`${newAddedPhotos.length}장의 사진이 추가되었습니다. [저장]을 눌러 클라우드에 반영하세요.`);
+      setTimeout(() => setSaveMessage(null), 4000);
+    }
+    setIsBulkUploading(false);
+    e.target.value = '';
+  };
+
+  // Handle multiple files upload for new project registration
+  const handleBulkPhotosUploadForNew = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsBulkUploading(true);
+    const newItems: { name: string; url: string }[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        const compressedUrl = await compressImageFile(file, 1920, 0.82);
+        newItems.push({
+          name: '', // 파일명을 넣지 않고 빈 상태로 생성
+          url: compressedUrl,
+        });
+      } catch (err) {
+        console.error('Error reading file:', file.name, err);
+      }
+    }
+
+    if (newItems.length > 0) {
+      setNewRoomPhotos((prev) => [...prev, ...newItems]);
+      setSaveMessage(`${newItems.length}장의 사진이 신규 아파트에 추가되었습니다.`);
+      setTimeout(() => setSaveMessage(null), 4000);
+    }
+    setIsBulkUploading(false);
+    e.target.value = '';
   };
 
   // Reset to initial mock data (and sync to Cloud)
@@ -530,18 +649,45 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
 
                 {/* Room Photos List */}
                 <div className="border-t border-[#E8E4DF] pt-5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold uppercase tracking-wider text-[#6E6E6E]">
-                      공간별 추가 사진 목록 ({roomPhotos.length}장)
-                    </label>
-                    <button
-                      type="button"
-                      onClick={handleAddPhotoToCurrent}
-                      className="text-xs px-2.5 py-1 border border-[#141414] hover:bg-[#141414] hover:text-white transition-colors flex items-center gap-1 font-semibold"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span>사진 추가</span>
-                    </button>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <label className="text-xs font-bold uppercase tracking-wider text-[#6E6E6E]">
+                        공간별 추가 사진 목록 ({roomPhotos.length}장)
+                      </label>
+                      <p className="text-[11px] text-[#8C8275] mt-0.5">
+                        컴퓨터에서 여러 장을 한 번에 선택하여 일괄 등록할 수 있습니다.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {/* 여러 장 일괄 업로드 버튼 */}
+                      <label className="text-xs px-3 py-1.5 bg-[#7A0016] hover:bg-[#600011] text-white transition-colors flex items-center gap-1.5 font-semibold cursor-pointer rounded-xs shadow-xs">
+                        {isBulkUploading ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Images className="w-3.5 h-3.5" />
+                        )}
+                        <span>{isBulkUploading ? '사진 처리 중...' : '여러 장 한번에 올리기'}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          disabled={isBulkUploading}
+                          onChange={handleBulkPhotosUpload}
+                          className="hidden"
+                        />
+                      </label>
+
+                      {/* 단일 추가 버튼 */}
+                      <button
+                        type="button"
+                        onClick={handleAddPhotoToCurrent}
+                        className="text-xs px-2.5 py-1.5 border border-[#141414] hover:bg-[#141414] hover:text-white transition-colors flex items-center gap-1 font-semibold rounded-xs"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>직접 추가</span>
+                      </button>
+                    </div>
                   </div>
 
                   <div className="space-y-3">
@@ -679,6 +825,66 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                         />
                       </label>
                     </div>
+                  </div>
+                </div>
+
+                {/* Additional Room Photos for New Apartment */}
+                <div className="border-t border-[#E8E4DF] pt-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <label className="text-xs font-bold uppercase tracking-wider text-[#6E6E6E]">
+                        공간별 추가 사진 ({newRoomPhotos.length}장)
+                      </label>
+                      <p className="text-[11px] text-[#8C8275] mt-0.5">
+                        여러 장의 사진을 선택하면 한 번에 갤러리에 추가됩니다.
+                      </p>
+                    </div>
+
+                    <label className="text-xs px-3 py-1.5 bg-[#7A0016] hover:bg-[#600011] text-white transition-colors flex items-center gap-1.5 font-semibold cursor-pointer rounded-xs shadow-xs">
+                      {isBulkUploading ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Images className="w-3.5 h-3.5" />
+                      )}
+                      <span>{isBulkUploading ? '사진 처리 중...' : '여러 장 한번에 올리기'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        disabled={isBulkUploading}
+                        onChange={handleBulkPhotosUploadForNew}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-1 bg-[#FBFBFB] border border-[#E8E4DF]">
+                    {newRoomPhotos.map((item, idx) => (
+                      <div key={idx} className="relative group border border-[#E8E4DF] bg-white p-1">
+                        <img src={item.url} alt="" className="w-full h-20 object-cover" />
+                        <div className="mt-1">
+                          <input
+                            type="text"
+                            value={item.name}
+                            onChange={(e) => {
+                              const updated = [...newRoomPhotos];
+                              updated[idx].name = e.target.value;
+                              setNewRoomPhotos(updated);
+                            }}
+                            className="w-full text-[11px] px-1 py-0.5 border border-[#E8E4DF]"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewRoomPhotos(newRoomPhotos.filter((_, i) => i !== idx));
+                          }}
+                          className="absolute top-1 right-1 p-1 bg-black/70 hover:bg-red-600 text-white rounded-full opacity-80 hover:opacity-100"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
