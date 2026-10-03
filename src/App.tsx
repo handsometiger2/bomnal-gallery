@@ -206,6 +206,27 @@ export default function App() {
     setPhotoIndex((prev) => (prev < totalPhotos - 1 ? prev + 1 : 0));
   }, [totalPhotos, resetZoom]);
 
+  // 특정 사진 직접 선택 (앞뒤로 넘기지 않고 즉시 점프)
+  const handleSelectPhoto = useCallback((idx: number) => {
+    resetZoom();
+    setPhotoIndex(idx);
+  }, [resetZoom]);
+
+  const thumbnailScrollRef = useRef<HTMLDivElement>(null);
+
+  // 활성 썸네일로 가로 스크롤 부드럽게 추종
+  useEffect(() => {
+    if (!thumbnailScrollRef.current) return;
+    const activeEl = thumbnailScrollRef.current.children[photoIndex] as HTMLElement | undefined;
+    if (activeEl) {
+      activeEl.scrollIntoView({
+        behavior: 'smooth',
+        inline: 'center',
+        block: 'nearest',
+      });
+    }
+  }, [photoIndex]);
+
   // Robust Global Keydown Handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -310,7 +331,7 @@ export default function App() {
         }}
       >
         <div
-          className="w-full h-full flex items-center justify-center transition-transform duration-100 ease-out select-none p-4 sm:p-10"
+          className="w-full h-full flex items-center justify-center transition-transform duration-100 ease-out select-none px-4 pt-16 pb-24 sm:px-12 sm:pt-20 sm:pb-28"
           style={{
             transform: `translate3d(${panOffset.x}px, ${panOffset.y}px, 0) scale(${zoomScale})`,
             transformOrigin: 'center center',
@@ -456,37 +477,90 @@ export default function App() {
 
       </main>
 
-      {/* 4. 하단 상태 표시 (중앙 NEXT 및 우측하단 저작권 정보 + 관리자 점 메뉴) */}
-      <footer className="relative z-30 w-full h-14 sm:h-16 px-6 sm:px-12 flex items-center justify-between pointer-events-auto">
+      {/* 4. 하단 영역: 사진 썸네일 스트립 바 & 하단 유틸리티 (원하는 사진을 클릭 한 번으로 즉시 선택) */}
+      <footer className="relative z-30 w-full px-4 sm:px-10 pb-4 pt-2 flex flex-col gap-2 pointer-events-auto">
         
-        {/* 좌측 여백 균형 잡기용 투명 박스 */}
-        <div className="w-20 hidden sm:block" />
+        {/* 하단 사진 썸네일 캐러셀 바 (스크롤 가능, 특정 사진 즉시 점프) */}
+        {allPhotos.length > 1 && (
+          <div className="w-full flex items-center justify-center">
+            <div
+              ref={thumbnailScrollRef}
+              className="flex items-center gap-2 sm:gap-2.5 overflow-x-auto max-w-full px-4 py-1.5 rounded-xl bg-black/55 backdrop-blur-md border border-white/10 shadow-2xl no-scrollbar select-none"
+              style={{ WebkitOverflowScrolling: 'touch' }}
+            >
+              {allPhotos.map((photo, idx) => {
+                const isActive = idx === photoIndex;
+                return (
+                  <button
+                    key={photo.id || `thumb-${idx}`}
+                    type="button"
+                    onClick={() => handleSelectPhoto(idx)}
+                    className={`relative shrink-0 rounded overflow-hidden transition-all duration-200 cursor-pointer group focus:outline-none ${
+                      isActive
+                        ? 'ring-2 ring-white scale-105 opacity-100 shadow-[0_0_12px_rgba(255,255,255,0.4)]'
+                        : 'opacity-40 hover:opacity-85 hover:scale-100 ring-1 ring-white/15'
+                    } w-12 h-9 sm:w-16 sm:h-11`}
+                    title={`${idx + 1}번째 사진 바로보기`}
+                  >
+                    <img
+                      src={photo.url}
+                      alt={`사진 ${idx + 1}`}
+                      className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src =
+                          'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=400&q=70';
+                      }}
+                    />
+                    {/* 사진 순서 번호 배지 */}
+                    <span
+                      className={`absolute bottom-0.5 right-0.5 px-1 py-0.2 rounded text-[8px] font-mono leading-none ${
+                        isActive ? 'bg-black/80 text-white font-bold' : 'bg-black/60 text-white/80'
+                      }`}
+                    >
+                      {idx + 1}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
-        {/* 중앙 하단: NEXT 힌트 (클릭 시 다음 사진으로 부드럽게 이동) */}
-        <div
-          onClick={handleNext}
-          className="absolute left-1/2 -translate-x-1/2 bottom-3 sm:bottom-4 flex flex-col items-center gap-1.5 text-[10px] sm:text-[11px] tracking-[0.35em] uppercase text-white/60 hover:text-white transition-all cursor-pointer group select-none drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]"
-        >
-          <span className="font-light group-hover:tracking-[0.45em] transition-all">NEXT</span>
-          <div className="w-px h-3.5 bg-white/40 group-hover:h-5 group-hover:bg-white transition-all" />
-        </div>
+        {/* 하단 바: 사진 카운터 / 중앙 NEXT / 저작권 및 관리자 메뉴 */}
+        <div className="w-full flex items-center justify-between text-white/50 text-[10px] sm:text-[11px] tracking-wider px-2">
+          
+          {/* 좌측: 현재 사진 카운트 (예: 03 / 12) */}
+          <div className="font-mono text-white/70 tracking-widest min-w-[70px]">
+            <span className="text-white font-medium">{String(photoIndex + 1).padStart(2, '0')}</span>
+            <span className="text-white/30 mx-1">/</span>
+            <span>{String(totalPhotos).padStart(2, '0')}</span>
+          </div>
 
-        {/* 우측 하단: 저작권 정보 + 그 뒤에 관리자 점 메뉴 */}
-        <div className="flex items-center gap-3.5 ml-auto text-white/50 text-[10px] sm:text-[11px] tracking-[0.16em]">
-          <span className="font-light select-none drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]">
-            2026 © All rights reserved the Bomnal
-          </span>
-
-          {/* 저작권 정보 뒤 관리자 점 메뉴 버튼 */}
-          <button
-            type="button"
-            onClick={() => setIsAdminPasswordOpen(true)}
-            className="p-1 opacity-25 hover:opacity-100 transition-opacity cursor-pointer focus:outline-none"
-            title="관리자 설정"
-            aria-label="Admin"
+          {/* 중앙: NEXT (클릭 시 다음 사진) */}
+          <div
+            onClick={handleNext}
+            className="flex items-center gap-2 tracking-[0.35em] uppercase text-white/60 hover:text-white transition-all cursor-pointer group select-none drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]"
           >
-            <span className="block w-1.5 h-1.5 rounded-full bg-white/50 hover:bg-white transition-colors" />
-          </button>
+            <span className="font-light group-hover:tracking-[0.45em] transition-all">NEXT</span>
+            <div className="w-3.5 h-px bg-white/40 group-hover:w-5 group-hover:bg-white transition-all" />
+          </div>
+
+          {/* 우측: 저작권 및 관리자 히든 버튼 */}
+          <div className="flex items-center gap-3 ml-auto">
+            <span className="font-light select-none hidden sm:inline drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]">
+              2026 © All rights reserved the Bomnal
+            </span>
+
+            <button
+              type="button"
+              onClick={() => setIsAdminPasswordOpen(true)}
+              className="p-1 opacity-25 hover:opacity-100 transition-opacity cursor-pointer focus:outline-none"
+              title="관리자 설정"
+              aria-label="Admin"
+            >
+              <span className="block w-1.5 h-1.5 rounded-full bg-white/50 hover:bg-white transition-colors" />
+            </button>
+          </div>
         </div>
 
       </footer>
