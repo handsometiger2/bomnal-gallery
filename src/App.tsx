@@ -13,27 +13,29 @@ import {
   Minimize,
   ZoomIn,
   ZoomOut,
-  RotateCcw,
-  Lock
+  RotateCcw
 } from 'lucide-react';
 import { AdminConsoleModal } from './components/AdminConsoleModal';
-import { AdminPasswordModal, setStoredAdminPassword } from './components/AdminPasswordModal';
+import { AdminPasswordModal } from './components/AdminPasswordModal';
 import { MainOverviewPage } from './components/MainOverviewPage';
+import { SiteLockScreen } from './components/SiteLockScreen';
 import {
   loadApartmentsFromFirestore,
   subscribeApartmentsFromFirestore,
-  subscribeAdminPasswordFromFirestore,
-  subscribeMainImageFromFirestore,
-  saveApartmentToFirestore,
-  BANNED_WOOD_HOUSE_PHOTO
+  getSitePasswordFromFirestore,
+  DEFAULT_SITE_PASSWORD
 } from './lib/firestoreService';
+import { subscribeAdminAuth } from './lib/adminAuth';
+import type { User } from 'firebase/auth';
 
 const STORAGE_KEY = 'bomnal_apartment_gallery_v2';
 const LEGACY_STORAGE_KEY = 'bomnal_apartment_gallery';
+/** 사이트 잠금 해제 상태를 저장하는 세션 키 (탭을 닫으면 다시 잠김) */
+const SITE_UNLOCK_KEY = 'bomnal_site_unlocked';
 
 export default function App() {
   // Navigation view mode: 'home' (메인페이지) | 'gallery' (전체화면 사진 뷰어)
-  const [currentView, setCurrentView] = useState<'home' | 'gallery'>('home');
+  const [currentView, setCurrentView] = useState<'home' | 'gallery'>('gallery');
 
   const [projects, setProjects] = useState<ApartmentProject[]>(() => {
     try {
@@ -41,20 +43,7 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // 캐시된 데이터에 남아있는 목조 주택 사진 즉시 치환
-          const cleaned = parsed.map((proj: ApartmentProject) => ({
-            ...proj,
-            thumbnailUrl: proj.thumbnailUrl?.includes('photo-1600585154340-be6161a56a0c')
-              ? 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1200&q=80'
-              : proj.thumbnailUrl,
-            roomPhotos: (proj.roomPhotos || []).map((r) => ({
-              ...r,
-              imageUrl: r.imageUrl?.includes('photo-1600585154340-be6161a56a0c')
-                ? 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1200&q=80'
-                : r.imageUrl,
-            })),
-          }));
-          return cleaned;
+          return parsed;
         }
       }
     } catch {
@@ -67,7 +56,18 @@ export default function App() {
   const [photoIndex, setPhotoIndex] = useState<number>(0);
   const [isAdminPasswordOpen, setIsAdminPasswordOpen] = useState<boolean>(false);
   const [isAdminOpen, setIsAdminOpen] = useState<boolean>(false);
+  const [adminUser, setAdminUser] = useState<User | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+
+  // 사이트 전체 잠금 (사진 보기 전 비밀번호 입력)
+  const [isSiteUnlocked, setIsSiteUnlocked] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem(SITE_UNLOCK_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [sitePassword, setSitePassword] = useState<string | null>(null);
 
   // Zoom & Pan state for original aspect-ratio image inspection
   const [zoomScale, setZoomScale] = useState<number>(1);
@@ -156,6 +156,52 @@ export default function App() {
     }
   };
 
+  // Firebase Auth 로그인 상태 구독 (세션 유지 시 자동 로그인)
+  useEffect(() => {
+    const unsubscribe = subscribeAdminAuth((user) => {
+      setAdminUser(user);
+      // 로그아웃되면 관리자 콘솔도 함께 닫기
+      if (!user) {
+        setIsAdminOpen(false);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 사이트 공개 비밀번호 불러오기 (Firestore settings/site_lock, 없으면 기본값)
+  useEffect(() => {
+    let cancelled = false;
+    getSitePasswordFromFirestore()
+      .then((pw) => {
+        if (!cancelled) setSitePassword(pw ?? DEFAULT_SITE_PASSWORD);
+      })
+      .catch(() => {
+        if (!cancelled) setSitePassword(DEFAULT_SITE_PASSWORD);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 사이트 잠금 해제
+  const handleSiteUnlock = useCallback(() => {
+    try {
+      sessionStorage.setItem(SITE_UNLOCK_KEY, '1');
+    } catch {
+      // ignore
+    }
+    setIsSiteUnlocked(true);
+  }, []);
+
+  // 관리자 진입 게이트: 로그인 상태면 콘솔 바로 열기, 아니면 로그인 모달
+  const openAdminGate = useCallback(() => {
+    if (adminUser) {
+      setIsAdminOpen(true);
+    } else {
+      setIsAdminPasswordOpen(true);
+    }
+  }, [adminUser]);
+
   // Real-time live synchronization with Cloud Firestore
   useEffect(() => {
     const unsubscribe = subscribeApartmentsFromFirestore(
@@ -170,41 +216,16 @@ export default function App() {
         }
       },
       (err) => {
-        console.warn('Real-time Firestore listener notice:', err);
+        console.warn('Real-time Firestore listener error, fallback to initial/local load:', err);
+        loadApartmentsFromFirestore().then((res) => {
+          if (res && res.length > 0) setProjects(res);
+        }).catch(() => {});
       }
     );
 
     return () => {
       unsubscribe();
     };
-  }, []);
-
-  // Main page background image sync with Cloud Firestore & local cache
-  const [mainImageUrl, setMainImageUrl] = useState<string>(() => {
-    return localStorage.getItem('bomnal_main_page_bg_cache') || '';
-  });
-  useEffect(() => {
-    const unsubMain = subscribeMainImageFromFirestore((cloudMainUrl) => {
-      if (cloudMainUrl) {
-        setMainImageUrl(cloudMainUrl);
-        try {
-          localStorage.setItem('bomnal_main_page_bg_cache', cloudMainUrl);
-        } catch {
-          // ignore
-        }
-      }
-    });
-    return () => unsubMain();
-  }, []);
-
-  // Admin password sync with Cloud Firestore
-  useEffect(() => {
-    const unsubPwd = subscribeAdminPasswordFromFirestore((cloudPassword) => {
-      if (cloudPassword) {
-        setStoredAdminPassword(cloudPassword);
-      }
-    });
-    return () => unsubPwd();
   }, []);
 
   // Save projects to state & localStorage
@@ -224,20 +245,24 @@ export default function App() {
   const currentProject = projects[currentProjectIndex] || projects[0];
 
   // All photos for the currently selected apartment (empty/blank url filter)
-  const validRoomPhotos = (currentProject.roomPhotos || [])
-    .filter((r) => Boolean(r && r.imageUrl && r.imageUrl.trim()))
-    .map((r) => ({
-      id: r.id,
-      url: r.imageUrl,
-    }));
-
-  // If apartment has room photos, display roomPhotos directly without injecting old thumbnail
-  const allPhotos =
-    validRoomPhotos.length > 0
-      ? validRoomPhotos
-      : currentProject.thumbnailUrl
+  const rawPhotos = [
+    ...(currentProject.thumbnailUrl
       ? [{ id: `${currentProject.id}-main`, url: currentProject.thumbnailUrl }]
-      : [];
+      : []),
+    ...(currentProject.roomPhotos || [])
+      .filter((r) => Boolean(r && r.imageUrl && r.imageUrl.trim()))
+      .map((r) => ({
+        id: r.id,
+        url: r.imageUrl,
+      })),
+  ];
+
+  const allPhotos = rawPhotos.length > 0 ? rawPhotos : [
+    {
+      id: `${currentProject.id}-empty`,
+      url: currentProject.thumbnailUrl || 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=80',
+    }
+  ];
 
   const currentPhoto = allPhotos[photoIndex] || allPhotos[0];
   const totalPhotos = allPhotos.length;
@@ -304,7 +329,7 @@ export default function App() {
       if (isModifierPressed && isKeyA) {
         e.preventDefault();
         e.stopPropagation();
-        setIsAdminPasswordOpen(true);
+        openAdminGate();
         return;
       }
 
@@ -327,14 +352,13 @@ export default function App() {
     };
 
     // capture: true로 등록하여 iframe이나 다른 엘리먼트보다 최우선으로 단축키 캡처
+    // (window에만 등록 — document 중복 등록 시 핸들러가 2번 실행되어 사진이 2장씩 넘어감)
     window.addEventListener('keydown', handleKeyDown, true);
-    document.addEventListener('keydown', handleKeyDown, true);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown, true);
-      document.removeEventListener('keydown', handleKeyDown, true);
     };
-  }, [handlePrev, handleNext, isAdminOpen]);
+  }, [handlePrev, handleNext, isAdminOpen, openAdminGate]);
 
   // Reset photo index when switching apartment
   const handleSelectProject = (idx: number) => {
@@ -355,7 +379,7 @@ export default function App() {
     }
     if (logoClickCountRef.current >= 3) {
       logoClickCountRef.current = 0;
-      setIsAdminPasswordOpen(true);
+      openAdminGate();
     } else {
       logoClickTimerRef.current = setTimeout(() => {
         logoClickCountRef.current = 0;
@@ -368,12 +392,11 @@ export default function App() {
       <div className="w-screen min-h-screen bg-[#FDFBF7]">
         <MainOverviewPage
           projects={projects}
-          mainImageUrl={mainImageUrl}
           onSelectProject={(idx) => {
             handleSelectProject(idx);
             setCurrentView('gallery');
           }}
-          onOpenAdmin={() => setIsAdminPasswordOpen(true)}
+          onOpenAdmin={openAdminGate}
         />
 
         {/* 관리자 비밀번호 입력 모달 */}
@@ -390,11 +413,22 @@ export default function App() {
         {isAdminOpen && (
           <AdminConsoleModal
             projects={projects}
+            initialProjectId={projects[currentProjectIndex]?.id}
             onClose={() => setIsAdminOpen(false)}
             onUpdateProjects={handleUpdateProjects}
           />
         )}
       </div>
+    );
+  }
+
+  // 사이트 잠금: 비밀번호 입력 전에는 잠금 화면만 표시
+  if (!isSiteUnlocked) {
+    return (
+      <SiteLockScreen
+        correctPassword={sitePassword}
+        onUnlock={handleSiteUnlock}
+      />
     );
   }
 
@@ -427,6 +461,10 @@ export default function App() {
               alt={currentProject.complexName || '인테리어 포트폴리오'}
               draggable={false}
               className="w-auto h-auto max-w-full max-h-full object-contain select-none pointer-events-none drop-shadow-2xl"
+              onError={(e) => {
+                // 이미지 로드 실패 시 고화질 기본 인테리어 사진으로 자동 대체
+                (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=80';
+              }}
             />
           ) : (
             <div className="text-white/40 text-sm">등록된 사진이 없습니다.</div>
@@ -585,6 +623,10 @@ export default function App() {
                       src={photo.url}
                       alt={`사진 ${idx + 1}`}
                       className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src =
+                          'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=400&q=70';
+                      }}
                     />
                     {/* 사진 순서 번호 배지 */}
                     <span
@@ -620,7 +662,7 @@ export default function App() {
             <div className="w-3.5 h-px bg-white/40 group-hover:w-5 group-hover:bg-white transition-all" />
           </div>
 
-          {/* 우측: 저작권 및 관리자 자물쇠 버튼 */}
+          {/* 우측: 저작권 및 관리자 히든 버튼 */}
           <div className="flex items-center gap-3 ml-auto">
             <span className="font-light select-none hidden sm:inline drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]">
               2026 © All rights reserved the Bomnal
@@ -628,12 +670,12 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => setIsAdminPasswordOpen(true)}
-              className="p-1.5 opacity-40 hover:opacity-100 transition-all cursor-pointer focus:outline-none hover:scale-110 active:scale-95 text-white/70 hover:text-white"
+              onClick={openAdminGate}
+              className="p-1 opacity-25 hover:opacity-100 transition-opacity cursor-pointer focus:outline-none"
               title="관리자 설정"
-              aria-label="관리자 설정"
+              aria-label="Admin"
             >
-              <Lock className="w-3.5 h-3.5 drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]" />
+              <span className="block w-1.5 h-1.5 rounded-full bg-white/50 hover:bg-white transition-colors" />
             </button>
           </div>
         </div>
@@ -654,6 +696,7 @@ export default function App() {
       {isAdminOpen && (
         <AdminConsoleModal
           projects={projects}
+          initialProjectId={projects[currentProjectIndex]?.id}
           onClose={() => setIsAdminOpen(false)}
           onUpdateProjects={handleUpdateProjects}
         />

@@ -51,8 +51,6 @@ export interface ApartmentProject {
   };
   agentNote: string; // 공인중개사 코멘트 (예: 동일 라인 로열층 입주 가능한 매물 확보중, 실거주 만족도 최상)
   availableListingNotice?: string; // 매물 연계 정보 (예: "동일 평형 15층 급매물 진행 가능")
-  hasPhotoChunks?: boolean; // 고용량 사진 청크 분할 저장 여부
-  photoChunkCount?: number; // 분할된 청크 수
 }
 
 export interface FilterOptions {
