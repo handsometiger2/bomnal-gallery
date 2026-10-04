@@ -1,5 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Lock, X, KeyRound, Eye, EyeOff } from 'lucide-react';
+import {
+  saveAdminPasswordToFirestore,
+  subscribeAdminPasswordFromFirestore
+} from '../lib/firestoreService';
 
 interface AdminPasswordModalProps {
   isOpen: boolean;
@@ -8,11 +12,17 @@ interface AdminPasswordModalProps {
 }
 
 const ADMIN_PASSWORD_KEY = 'bomnal_admin_password';
-const DEFAULT_PASSWORD = 'admin'; // 기본 비밀번호 (관리자 콘솔에서 변경 가능)
+const DEFAULT_PASSWORD = '2656'; // 요청된 기본 비밀번호
 
 export function getStoredAdminPassword(): string {
   try {
-    return localStorage.getItem(ADMIN_PASSWORD_KEY) || DEFAULT_PASSWORD;
+    const val = localStorage.getItem(ADMIN_PASSWORD_KEY);
+    // 만약 이전의 'admin'이 남아있다면 즉시 '2656'으로 갱신
+    if (!val || val === 'admin') {
+      localStorage.setItem(ADMIN_PASSWORD_KEY, DEFAULT_PASSWORD);
+      return DEFAULT_PASSWORD;
+    }
+    return val;
   } catch {
     return DEFAULT_PASSWORD;
   }
@@ -24,6 +34,10 @@ export function setStoredAdminPassword(newPassword: string): void {
   } catch {
     // fallback
   }
+  // Cloud Firestore에도 즉시 동기화
+  saveAdminPasswordToFirestore(newPassword).catch((err) => {
+    console.warn('Failed to sync admin password to Firestore:', err);
+  });
 }
 
 export const AdminPasswordModal: React.FC<AdminPasswordModalProps> = ({
@@ -34,12 +48,32 @@ export const AdminPasswordModal: React.FC<AdminPasswordModalProps> = ({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [currentAdminPassword, setCurrentAdminPassword] = useState<string>(() => getStoredAdminPassword());
+
+  // Firestore 클라우드에서 최신 비밀번호 실시간 구독
+  useEffect(() => {
+    const unsub = subscribeAdminPasswordFromFirestore((cloudPassword) => {
+      if (cloudPassword && cloudPassword !== 'admin') {
+        setCurrentAdminPassword(cloudPassword);
+        try {
+          localStorage.setItem(ADMIN_PASSWORD_KEY, cloudPassword);
+        } catch {
+          // ignore
+        }
+      } else if (cloudPassword === 'admin') {
+        // 기존 admin은 2656으로 덮어쓰기
+        setCurrentAdminPassword('2656');
+        setStoredAdminPassword('2656');
+      }
+    });
+    return () => unsub();
+  }, []);
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const correctPassword = getStoredAdminPassword();
+    const correctPassword = currentAdminPassword || getStoredAdminPassword();
 
     if (password.trim() === correctPassword) {
       setErrorMsg(null);

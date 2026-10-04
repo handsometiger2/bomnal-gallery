@@ -1,4 +1,5 @@
 import React from 'react';
+import { Lock } from 'lucide-react';
 import { ApartmentProject } from '../types';
 
 interface MainOverviewPageProps {
@@ -18,7 +19,7 @@ export const MainOverviewPage: React.FC<MainOverviewPageProps> = ({
   const displayImage =
     mainImageUrl ||
     projects[0]?.thumbnailUrl ||
-    'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2400&q=85';
+    'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=2400&q=85';
 
   return (
     <div
@@ -62,7 +63,7 @@ export const MainOverviewPage: React.FC<MainOverviewPageProps> = ({
         </nav>
       </header>
 
-      {/* 4. 우측 하단 저작권 & 관리자 설정 히든 점 */}
+      {/* 4. 우측 하단 저작권 & 관리자 자물쇠 버튼 */}
       <footer className="absolute bottom-4 right-6 sm:right-12 z-30 flex items-center gap-3.5 text-white/60 text-[10px] sm:text-[11px] tracking-[0.16em] pointer-events-auto">
         <span className="font-light select-none drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]">
           2026 © All rights reserved the Bomnal
@@ -74,11 +75,11 @@ export const MainOverviewPage: React.FC<MainOverviewPageProps> = ({
             e.stopPropagation();
             onOpenAdmin();
           }}
-          className="p-1 opacity-30 hover:opacity-100 transition-opacity cursor-pointer focus:outline-none"
+          className="p-1.5 opacity-40 hover:opacity-100 transition-all cursor-pointer focus:outline-none hover:scale-110 active:scale-95 text-white/70 hover:text-white"
           title="관리자 설정"
-          aria-label="Admin"
+          aria-label="관리자 설정"
         >
-          <span className="block w-1.5 h-1.5 rounded-full bg-white/60 hover:bg-white transition-colors" />
+          <Lock className="w-3.5 h-3.5 drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]" />
         </button>
       </footer>
     </div>

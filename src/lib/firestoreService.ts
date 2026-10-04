@@ -14,6 +14,17 @@ import { INITIAL_PORTFOLIOS } from '../data/mockPortfolios';
 const APARTMENTS_COL = 'apartments';
 const PHOTOS_SUBCOL = 'photos';
 
+export const BANNED_WOOD_HOUSE_PHOTO = 'photo-1600585154340-be6161a56a0c';
+export const REPLACEMENT_INTERIOR_PHOTO = 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1200&q=80';
+
+export function sanitizePhotoUrl(url: string | undefined): string {
+  if (!url) return '';
+  if (url.includes(BANNED_WOOD_HOUSE_PHOTO)) {
+    return REPLACEMENT_INTERIOR_PHOTO;
+  }
+  return url;
+}
+
 /**
  * Real-time listener for apartments and their photos
  */
@@ -40,32 +51,37 @@ export function subscribeApartmentsFromFirestore(
       }
 
       try {
-        // Load each apartment with its photos (supports both subcollection and legacy inline)
-        const projectsWithPhotos: ApartmentProject[] = await Promise.all(
-          snap.docs.map(async (docSnap) => {
-            const raw = docSnap.data() as ApartmentProject;
-            try {
-              const photoSubSnap = await getDocs(collection(db, APARTMENTS_COL, docSnap.id, PHOTOS_SUBCOL));
-              if (!photoSubSnap.empty) {
-                const subPhotos = photoSubSnap.docs
-                  .map((pDoc) => pDoc.data() as RoomPhoto & { order?: number })
-                  .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-                return {
-                  ...raw,
-                  roomPhotos: subPhotos,
-                };
-              }
-            } catch (err) {
-              console.warn('Error reading photo subcollection, fallback to inline photos:', err);
-            }
-            return raw;
-          })
-        );
+        // Direct read from documents - ZERO additional subcollection queries, ultra-low quota consumption
+        const projectsWithPhotos: ApartmentProject[] = snap.docs.map((docSnap) => {
+          const raw = docSnap.data() as ApartmentProject;
+          const finalThumbnail = sanitizePhotoUrl(raw.thumbnailUrl);
+          const cleanedRoomPhotos: RoomPhoto[] = (raw.roomPhotos || []).map((p) => ({
+            ...p,
+            imageUrl: sanitizePhotoUrl(p.imageUrl),
+          }));
+
+          return {
+            ...raw,
+            id: docSnap.id,
+            thumbnailUrl: finalThumbnail,
+            roomPhotos: cleanedRoomPhotos,
+          };
+        });
 
         onData(projectsWithPhotos);
       } catch (err) {
         console.error('Error constructing projects with photos:', err);
-        const fallback = snap.docs.map((d) => d.data() as ApartmentProject);
+        const fallback = snap.docs.map((d) => {
+          const raw = d.data() as ApartmentProject;
+          return {
+            ...raw,
+            thumbnailUrl: sanitizePhotoUrl(raw.thumbnailUrl),
+            roomPhotos: (raw.roomPhotos || []).map((p) => ({
+              ...p,
+              imageUrl: sanitizePhotoUrl(p.imageUrl),
+            })),
+          };
+        });
         onData(fallback);
       }
     },
@@ -84,35 +100,23 @@ export async function loadApartmentsFromFirestore(): Promise<ApartmentProject[]>
     const colRef = collection(db, APARTMENTS_COL);
     const snap = await getDocs(colRef);
     if (!snap.empty) {
-      const projects = await Promise.all(
-        snap.docs.map(async (docSnap) => {
-          const raw = docSnap.data() as ApartmentProject;
-          try {
-            const photoSubSnap = await getDocs(collection(db, APARTMENTS_COL, docSnap.id, PHOTOS_SUBCOL));
-            if (!photoSubSnap.empty) {
-              const subPhotos = photoSubSnap.docs
-                .map((pDoc) => pDoc.data() as RoomPhoto & { order?: number })
-                .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-              return {
-                ...raw,
-                roomPhotos: subPhotos,
-              };
-            }
-          } catch {
-            // fallback
-          }
-          return raw;
-        })
-      );
-      return projects;
+      return snap.docs.map((docSnap) => {
+        const raw = docSnap.data() as ApartmentProject;
+        return {
+          ...raw,
+          id: docSnap.id,
+          thumbnailUrl: sanitizePhotoUrl(raw.thumbnailUrl),
+          roomPhotos: (raw.roomPhotos || []).map((p) => ({
+            ...p,
+            imageUrl: sanitizePhotoUrl(p.imageUrl),
+          })),
+        };
+      });
     }
 
-    // Seed default projects
-    console.log('Seeding initial apartments to Firestore...');
-    await syncAllApartmentsToFirestore(INITIAL_PORTFOLIOS);
     return INITIAL_PORTFOLIOS;
   } catch (error) {
-    console.error('Failed to load from Firestore, falling back to local data:', error);
+    console.warn('Falling back to local data on read quota limitation:', error);
     return INITIAL_PORTFOLIOS;
   }
 }
@@ -125,9 +129,12 @@ export async function loadApartmentsFromFirestore(): Promise<ApartmentProject[]>
 export async function saveApartmentToFirestore(project: ApartmentProject): Promise<void> {
   try {
     const aptRef = doc(db, APARTMENTS_COL, project.id);
-    const photos = project.roomPhotos || [];
+    const photos = (project.roomPhotos || []).map((p) => ({
+      ...p,
+      imageUrl: sanitizePhotoUrl(p.imageUrl),
+    }));
 
-    // 1. Save main apartment document (without the giant array of photos)
+    // 1. Save directly to main apartment document without ANY preceding getDocs reads
     const baseProjectDoc = {
       id: project.id,
       complexName: project.complexName || '',
@@ -139,7 +146,8 @@ export async function saveApartmentToFirestore(project: ApartmentProject): Promi
       costMillionWon: project.costMillionWon || 0,
       durationWeeks: project.durationWeeks || 4,
       completionDate: project.completionDate || '2026',
-      thumbnailUrl: project.thumbnailUrl || (photos[0]?.imageUrl || ''),
+      thumbnailUrl: sanitizePhotoUrl(project.thumbnailUrl) || (photos[0]?.imageUrl || ''),
+      roomPhotos: photos, // 루트 문서에 고화질 사진 배열 바로 저장
       features: project.features || [],
       materials: project.materials || {},
       agentNote: project.agentNote || '',
@@ -147,31 +155,8 @@ export async function saveApartmentToFirestore(project: ApartmentProject): Promi
       updatedAt: Date.now()
     };
 
+    // Single write operation with merge: true - zero read quota consumed!
     await setDoc(aptRef, baseProjectDoc, { merge: true });
-
-    // 2. Clear old photo documents in subcollection and save new ones
-    const photoColRef = collection(db, APARTMENTS_COL, project.id, PHOTOS_SUBCOL);
-    const existingPhotoSnap = await getDocs(photoColRef);
-    
-    // Batch delete existing
-    if (!existingPhotoSnap.empty) {
-      const deleteBatch = writeBatch(db);
-      existingPhotoSnap.docs.forEach((d) => deleteBatch.delete(d.ref));
-      await deleteBatch.commit();
-    }
-
-    // Save photos sequentially or in chunked batches (Firestore limits 500 per batch)
-    if (photos.length > 0) {
-      const photoBatch = writeBatch(db);
-      photos.forEach((photo, idx) => {
-        const pRef = doc(photoColRef, photo.id || `p-${idx}`);
-        photoBatch.set(pRef, {
-          ...photo,
-          order: idx
-        });
-      });
-      await photoBatch.commit();
-    }
   } catch (error) {
     console.error('Failed to save apartment to Firestore:', error);
     throw error;
@@ -179,18 +164,10 @@ export async function saveApartmentToFirestore(project: ApartmentProject): Promi
 }
 
 /**
- * Delete an apartment project and its photos from Firestore
+ * Delete an apartment project from Firestore
  */
 export async function deleteApartmentFromFirestore(projectId: string): Promise<void> {
   try {
-    const photoColRef = collection(db, APARTMENTS_COL, projectId, PHOTOS_SUBCOL);
-    const existingPhotoSnap = await getDocs(photoColRef);
-    if (!existingPhotoSnap.empty) {
-      const deleteBatch = writeBatch(db);
-      existingPhotoSnap.docs.forEach((d) => deleteBatch.delete(d.ref));
-      await deleteBatch.commit();
-    }
-
     const docRef = doc(db, APARTMENTS_COL, projectId);
     await deleteDoc(docRef);
   } catch (error) {
@@ -215,6 +192,7 @@ export async function syncAllApartmentsToFirestore(projects: ApartmentProject[])
 
 const SETTINGS_COL = 'settings';
 const MAIN_PAGE_DOC = 'main_page';
+const AUTH_SETTINGS_DOC = 'auth';
 
 export async function saveMainImageToFirestore(imageUrl: string): Promise<void> {
   try {
@@ -238,6 +216,41 @@ export function subscribeMainImageFromFirestore(
         const data = snap.data();
         if (data && data.mainImageUrl) {
           onData(data.mainImageUrl);
+        }
+      }
+    },
+    onError
+  );
+}
+
+/**
+ * Save Admin Password to Firestore Cloud so it never resets to 'admin'
+ */
+export async function saveAdminPasswordToFirestore(password: string): Promise<void> {
+  try {
+    const docRef = doc(db, SETTINGS_COL, AUTH_SETTINGS_DOC);
+    await setDoc(docRef, { adminPassword: password, updatedAt: Date.now() }, { merge: true });
+  } catch (error) {
+    console.error('Failed to save admin password to Firestore:', error);
+    throw error;
+  }
+}
+
+/**
+ * Real-time subscribe to Admin Password from Firestore Cloud
+ */
+export function subscribeAdminPasswordFromFirestore(
+  onData: (password: string) => void,
+  onError?: (err: unknown) => void
+): () => void {
+  const docRef = doc(db, SETTINGS_COL, AUTH_SETTINGS_DOC);
+  return onSnapshot(
+    docRef,
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data && typeof data.adminPassword === 'string' && data.adminPassword.trim()) {
+          onData(data.adminPassword.trim());
         }
       }
     },

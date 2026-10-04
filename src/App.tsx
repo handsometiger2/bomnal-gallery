@@ -13,12 +13,19 @@ import {
   Minimize,
   ZoomIn,
   ZoomOut,
-  RotateCcw
+  RotateCcw,
+  Lock
 } from 'lucide-react';
 import { AdminConsoleModal } from './components/AdminConsoleModal';
-import { AdminPasswordModal } from './components/AdminPasswordModal';
+import { AdminPasswordModal, setStoredAdminPassword } from './components/AdminPasswordModal';
 import { MainOverviewPage } from './components/MainOverviewPage';
-import { loadApartmentsFromFirestore, subscribeApartmentsFromFirestore } from './lib/firestoreService';
+import {
+  loadApartmentsFromFirestore,
+  subscribeApartmentsFromFirestore,
+  subscribeAdminPasswordFromFirestore,
+  saveApartmentToFirestore,
+  BANNED_WOOD_HOUSE_PHOTO
+} from './lib/firestoreService';
 
 const STORAGE_KEY = 'bomnal_apartment_gallery_v2';
 const LEGACY_STORAGE_KEY = 'bomnal_apartment_gallery';
@@ -33,7 +40,20 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          // 캐시된 데이터에 남아있는 목조 주택 사진 즉시 치환
+          const cleaned = parsed.map((proj: ApartmentProject) => ({
+            ...proj,
+            thumbnailUrl: proj.thumbnailUrl?.includes('photo-1600585154340-be6161a56a0c')
+              ? 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1200&q=80'
+              : proj.thumbnailUrl,
+            roomPhotos: (proj.roomPhotos || []).map((r) => ({
+              ...r,
+              imageUrl: r.imageUrl?.includes('photo-1600585154340-be6161a56a0c')
+                ? 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1200&q=80'
+                : r.imageUrl,
+            })),
+          }));
+          return cleaned;
         }
       }
     } catch {
@@ -149,16 +169,23 @@ export default function App() {
         }
       },
       (err) => {
-        console.warn('Real-time Firestore listener error, fallback to initial/local load:', err);
-        loadApartmentsFromFirestore().then((res) => {
-          if (res && res.length > 0) setProjects(res);
-        }).catch(() => {});
+        console.warn('Real-time Firestore listener notice:', err);
       }
     );
 
     return () => {
       unsubscribe();
     };
+  }, []);
+
+  // Admin password sync with Cloud Firestore
+  useEffect(() => {
+    const unsubPwd = subscribeAdminPasswordFromFirestore((cloudPassword) => {
+      if (cloudPassword) {
+        setStoredAdminPassword(cloudPassword);
+      }
+    });
+    return () => unsubPwd();
   }, []);
 
   // Save projects to state & localStorage
@@ -190,12 +217,7 @@ export default function App() {
       })),
   ];
 
-  const allPhotos = rawPhotos.length > 0 ? rawPhotos : [
-    {
-      id: `${currentProject.id}-empty`,
-      url: currentProject.thumbnailUrl || 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=80',
-    }
-  ];
+  const allPhotos = rawPhotos;
 
   const currentPhoto = allPhotos[photoIndex] || allPhotos[0];
   const totalPhotos = allPhotos.length;
@@ -384,10 +406,6 @@ export default function App() {
               alt={currentProject.complexName || '인테리어 포트폴리오'}
               draggable={false}
               className="w-auto h-auto max-w-full max-h-full object-contain select-none pointer-events-none drop-shadow-2xl"
-              onError={(e) => {
-                // 이미지 로드 실패 시 고화질 기본 인테리어 사진으로 자동 대체
-                (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=80';
-              }}
             />
           ) : (
             <div className="text-white/40 text-sm">등록된 사진이 없습니다.</div>
@@ -546,10 +564,6 @@ export default function App() {
                       src={photo.url}
                       alt={`사진 ${idx + 1}`}
                       className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src =
-                          'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=400&q=70';
-                      }}
                     />
                     {/* 사진 순서 번호 배지 */}
                     <span
@@ -585,7 +599,7 @@ export default function App() {
             <div className="w-3.5 h-px bg-white/40 group-hover:w-5 group-hover:bg-white transition-all" />
           </div>
 
-          {/* 우측: 저작권 및 관리자 히든 버튼 */}
+          {/* 우측: 저작권 및 관리자 자물쇠 버튼 */}
           <div className="flex items-center gap-3 ml-auto">
             <span className="font-light select-none hidden sm:inline drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]">
               2026 © All rights reserved the Bomnal
@@ -594,11 +608,11 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsAdminPasswordOpen(true)}
-              className="p-1 opacity-25 hover:opacity-100 transition-opacity cursor-pointer focus:outline-none"
+              className="p-1.5 opacity-40 hover:opacity-100 transition-all cursor-pointer focus:outline-none hover:scale-110 active:scale-95 text-white/70 hover:text-white"
               title="관리자 설정"
-              aria-label="Admin"
+              aria-label="관리자 설정"
             >
-              <span className="block w-1.5 h-1.5 rounded-full bg-white/50 hover:bg-white transition-colors" />
+              <Lock className="w-3.5 h-3.5 drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]" />
             </button>
           </div>
         </div>
