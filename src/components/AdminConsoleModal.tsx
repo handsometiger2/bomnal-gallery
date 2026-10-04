@@ -386,10 +386,10 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     if (!file) return;
     setIsSavingMainImage(true);
     try {
-      const compressedUrl = await compressImageFile(file, false);
+      const compressedUrl = await compressImageFile(file, 'hero');
       setCurrentMainImageUrl(compressedUrl);
       await saveMainImageToFirestore(compressedUrl);
-      setSaveMessage('✓ 메인 배경화면이 클라우드에 실시간 저장되었습니다!');
+      setSaveMessage('✓ 초고화질 메인 배경화면이 클라우드에 실시간 저장되었습니다!');
     } catch (err) {
       console.error('Failed to upload main image:', err);
       alert('메인 배경 이미지 저장 중 오류가 발생했습니다.');
@@ -1174,9 +1174,17 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                     <h4 className="text-sm font-bold text-[#141414] mb-1">
                       새로운 배경 이미지 업로드
                     </h4>
-                    <p className="text-xs text-[#8C8275]">
-                      컴퓨터에 보관된 사진(다운로드한 이미지 등)을 선택하면 고화질로 자동 최적화되어 즉시 클라우드에 영구 저장됩니다.
+                    <p className="text-xs text-[#8C8275] mb-2">
+                      컴퓨터에 보관된 사진을 선택하면 최대 2560px(QHD/FHD) 초고화질로 자동 최적화되어 클라우드에 영구 저장됩니다.
                     </p>
+                    <div className="bg-white p-3 rounded border border-[#E8E4DF] text-[11px] text-[#4A4A4A] space-y-1">
+                      <div className="font-semibold text-[#7A0016] flex items-center gap-1">
+                        <span>💡 가장 선명하게 보이는 최적 규격 안내:</span>
+                      </div>
+                      <div>• <strong>권장 해상도:</strong> 가로 <strong>1920 × 1080 px</strong> (Full HD) ~ <strong>2560 × 1440 px</strong> (QHD)</div>
+                      <div>• <strong>화면 비율:</strong> <strong>16:9</strong> (가로형 와이드 비율)</div>
+                      <div>• <strong>참고:</strong> 가로가 1920px 미만인 작은 이미지를 전체화면에 띄우면 화면에 맞게 2~3배 확대되어 흐릿해질 수 있습니다.</div>
+                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-3">

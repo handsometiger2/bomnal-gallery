@@ -1,11 +1,37 @@
 /**
  * High-efficiency Image Compressor for Cloud Firestore
  * Resizes and compresses user-uploaded photos to prevent exceeding Firestore document limits (1MB)
- * while preserving high fidelity for architectural / interior portfolio viewing.
+ * while preserving crystal-clear fidelity for architectural / interior portfolio viewing.
  */
-export async function compressImageFile(file: File, isThumbnail = false): Promise<string> {
-  const maxDim = isThumbnail ? 800 : 1024;
-  const initialQuality = isThumbnail ? 0.55 : 0.60;
+
+export type CompressMode = 'thumbnail' | 'photo' | 'hero';
+
+export async function compressImageFile(
+  file: File,
+  modeOrIsThumbnail: CompressMode | boolean = 'photo'
+): Promise<string> {
+  const mode: CompressMode =
+    typeof modeOrIsThumbnail === 'boolean'
+      ? (modeOrIsThumbnail ? 'thumbnail' : 'photo')
+      : modeOrIsThumbnail;
+
+  // Mode settings:
+  // - 'hero' (메인 전체화면 배경): 가로 최대 2560px(QHD/FHD), 화질 82% 유지 (단독 문서이므로 초고화질 보장)
+  // - 'photo' (아파트 공간별 사진): 1024px, 화질 60%
+  // - 'thumbnail' (목록 썸네일): 800px, 화질 55%
+  let maxDim = 1024;
+  let initialQuality = 0.60;
+  let sizeCap = 105000; // ~80KB
+
+  if (mode === 'hero') {
+    maxDim = 2560;
+    initialQuality = 0.82;
+    sizeCap = 900000; // ~680KB (Firestore 1MB 한도 내 초고화질)
+  } else if (mode === 'thumbnail') {
+    maxDim = 800;
+    initialQuality = 0.55;
+    sizeCap = 90000;
+  }
 
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -44,6 +70,9 @@ export async function compressImageFile(file: File, isThumbnail = false): Promis
             return;
           }
 
+          // Smooth high-quality scaling
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
           ctx.fillStyle = '#FFFFFF';
           ctx.fillRect(0, 0, width, height);
           ctx.drawImage(img, 0, 0, width, height);
@@ -51,20 +80,22 @@ export async function compressImageFile(file: File, isThumbnail = false): Promis
           // First pass
           let dataUrl = canvas.toDataURL('image/jpeg', initialQuality);
 
-          // If still over 80KB (approx 105,000 base64 chars), run second pass
-          if (dataUrl.length > 105000) {
+          // If still over sizeCap, perform gentle second pass
+          if (dataUrl.length > sizeCap) {
             const secondCanvas = document.createElement('canvas');
-            const scale = 0.85;
+            const scale = mode === 'hero' ? 0.90 : 0.85;
             const w2 = Math.round(width * scale);
             const h2 = Math.round(height * scale);
             secondCanvas.width = w2;
             secondCanvas.height = h2;
             const ctx2 = secondCanvas.getContext('2d');
             if (ctx2) {
+              ctx2.imageSmoothingEnabled = true;
+              ctx2.imageSmoothingQuality = 'high';
               ctx2.fillStyle = '#FFFFFF';
               ctx2.fillRect(0, 0, w2, h2);
               ctx2.drawImage(img, 0, 0, w2, h2);
-              dataUrl = secondCanvas.toDataURL('image/jpeg', 0.48);
+              dataUrl = secondCanvas.toDataURL('image/jpeg', mode === 'hero' ? 0.75 : 0.48);
             }
           }
 

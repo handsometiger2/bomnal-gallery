@@ -26,11 +26,14 @@ export const MainOverviewPage: React.FC<MainOverviewPageProps> = ({
       className="relative w-screen h-screen bg-[#0A0A0A] overflow-hidden select-none cursor-pointer"
       onClick={() => onSelectProject(0)}
     >
-      {/* 1. 화면 전체에 단 하나만 떠 있는 메인 이미지 */}
+      {/* 1. 화면 전체에 단 하나만 떠 있는 메인 이미지 (초고화질 선명 렌더링) */}
       <img
         src={displayImage}
         alt="BOMNAL 메인"
-        className="w-full h-full object-cover transition-transform duration-1000 ease-out hover:scale-102"
+        className="w-full h-full object-cover object-center select-none pointer-events-none"
+        style={{
+          imageRendering: '-webkit-optimize-contrast',
+        }}
         draggable={false}
       />
 
