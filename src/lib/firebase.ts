@@ -1,5 +1,6 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { initializeFirestore, getFirestore } from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
 
 export const firebaseConfig = {
   projectId: "impactful-actor-sxjsq",
@@ -19,3 +20,6 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0
 export const db = firebaseConfig.firestoreDatabaseId
   ? initializeFirestore(app, {}, firebaseConfig.firestoreDatabaseId)
   : getFirestore(app);
+
+// Firebase Authentication (관리자 로그인용)
+export const auth = getAuth(app);
