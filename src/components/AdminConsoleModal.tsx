@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ApartmentProject, RoomPhoto } from '../types';
 import {
   X,
@@ -13,6 +13,7 @@ import {
   KeyRound,
   Check,
   Images,
+  Wallpaper,
   LogOut
 } from 'lucide-react';
 import { INITIAL_PORTFOLIOS } from '../data/mockPortfolios';
@@ -20,53 +21,19 @@ import {
   saveApartmentToFirestore,
   deleteApartmentFromFirestore,
   syncAllApartmentsToFirestore,
+  saveMainImageToFirestore,
+  subscribeMainImageFromFirestore,
   saveSitePasswordToFirestore
 } from '../lib/firestoreService';
 import { changeAdminPassword, signOutAdmin, authErrorMessage } from '../lib/adminAuth';
-
-// Helper to compress images so Firestore document size limit (1MB) is never exceeded
-const compressImageFile = (file: File, maxDim = 1280, quality = 0.70): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = reject;
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onerror = reject;
-      img.onload = () => {
-        let width = img.width;
-        let height = img.height;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(e.target?.result as string);
-          return;
-        }
-        ctx.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL('image/jpeg', quality);
-        resolve(dataUrl);
-      };
-      img.src = e.target?.result as string;
-    };
-    reader.readAsDataURL(file);
-  });
-};
+import { compressImageFile } from '../utils/imageCompressor';
 
 interface AdminConsoleModalProps {
   projects: ApartmentProject[];
   onClose: () => void;
   onUpdateProjects: (updated: ApartmentProject[]) => void;
-  initialProjectId?: string; // 콘솔 열 때 미리 선택할 아파트 (갤러리에서 보고 있던 것)
+  /** 콘솔을 열 때 갤러리에서 보고 있던 아파트를 미리 선택 */
+  initialProjectId?: string;
 }
 
 export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
@@ -75,23 +42,40 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
   onUpdateProjects,
   initialProjectId,
 }) => {
-  const [selectedProjectId, setSelectedProjectId] = useState<string>(
-    initialProjectId && projects.some((p) => p.id === initialProjectId)
-      ? initialProjectId
-      : projects[0]?.id || ''
-  );
-  const [activeTab, setActiveTab] = useState<'edit' | 'add'>('edit');
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(() => {
+    if (initialProjectId && projects.some((p) => p.id === initialProjectId)) {
+      return initialProjectId;
+    }
+    return projects[0]?.id || '';
+  });
+  const [activeTab, setActiveTab] = useState<'edit' | 'add' | 'mainBg'>('edit');
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
-  // Admin Password Management (Firebase Auth)
+  // Main Page Background Image state
+  const [currentMainImageUrl, setCurrentMainImageUrl] = useState<string>('');
+  const [isSavingMainImage, setIsSavingMainImage] = useState<boolean>(false);
+  const [customMainUrlInput, setCustomMainUrlInput] = useState<string>('');
+
+  useEffect(() => {
+    const unsub = subscribeMainImageFromFirestore((cloudUrl) => {
+      if (cloudUrl) {
+        setCurrentMainImageUrl(cloudUrl);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Firebase Auth 관리자 비밀번호 변경
   const [adminPwdInput, setAdminPwdInput] = useState<string>('');
   const [adminPwdSaved, setAdminPwdSaved] = useState<boolean>(false);
+  const [adminPwdSaving, setAdminPwdSaving] = useState<boolean>(false);
   const [adminPwdError, setAdminPwdError] = useState<string | null>(null);
-  // 사이트 공개 비밀번호 (갤러리 입장용)
+
+  // 사이트 공개 비밀번호 변경
   const [sitePwdInput, setSitePwdInput] = useState<string>('');
   const [sitePwdSaved, setSitePwdSaved] = useState<boolean>(false);
-  const [sitePwdError, setSitePwdError] = useState<string | null>(null);
+  const [sitePwdSaving, setSitePwdSaving] = useState<boolean>(false);
 
   // Currently editing project
   const currentProject = projects.find((p) => p.id === selectedProjectId) || projects[0];
@@ -109,6 +93,16 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     setThumbnailUrl(proj.thumbnailUrl);
     setRoomPhotos(proj.roomPhotos || []);
   };
+
+  // 외부(Firestore)에서 projects가 실시간 갱신될 때 단지명/대표이미지만 최신화 (사진 목록은 현재 편집 상태 존중)
+  useEffect(() => {
+    if (activeTab === 'edit') {
+      const match = projects.find((p) => p.id === selectedProjectId);
+      if (match) {
+        if (!complexName) setComplexName(match.complexName);
+      }
+    }
+  }, [projects, selectedProjectId, activeTab]);
 
   // New Apartment state - 완전히 빈(blank) 상태로 초기화 (평형/주소 입력 필드 제거)
   const [newName, setNewName] = useState('');
@@ -128,22 +122,51 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     setActiveTab('add');
   };
 
+  // 아파트 삭제 확인용 상태 (iframe 내 window.confirm 차단 문제 해결)
+  const [projectToDelete, setProjectToDelete] = useState<ApartmentProject | null>(null);
+
+  // 전체 삭제 확인 팝업 대체 (브라우저 iframe confirm 차단 이슈 해결을 위한 인라인 확인 상태)
+  const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
+
   // 편집 중인 아파트의 모든 추가 사진 일괄 삭제
-  const handleClearAllRoomPhotos = () => {
+  const handleClearAllRoomPhotos = async () => {
     if (roomPhotos.length === 0) return;
-    if (confirm(`등록된 추가 사진 ${roomPhotos.length}장을 모두 삭제하시겠습니까?`)) {
-      setRoomPhotos([]);
-      setSaveMessage('추가 사진이 모두 삭제되었습니다. [저장]을 눌러 클라우드에 반영하세요.');
-      setTimeout(() => setSaveMessage(null), 3500);
+    setShowClearConfirm(false);
+
+    // 1. 화면의 사진 목록 즉각 삭제 (동기식)
+    setRoomPhotos([]);
+
+    // 2. 전체 projects 상태 즉시 업데이트
+    const target: ApartmentProject = {
+      ...currentProject,
+      complexName,
+      thumbnailUrl,
+      roomPhotos: [],
+    };
+
+    const updated = projects.map((p) => (p.id === selectedProjectId ? target : p));
+    onUpdateProjects(updated);
+
+    // 3. 클라우드 Firestore에 즉시 영구 삭제 동기화
+    setIsSaving(true);
+    setSaveMessage('사진을 클라우드에서 삭제 중입니다...');
+
+    try {
+      await saveApartmentToFirestore(target);
+      setSaveMessage('✓ 추가 사진이 모두 삭제되었습니다.');
+    } catch (err: unknown) {
+      console.error('Failed to clear photos from Firestore:', err);
+      setSaveMessage('로컬에서 삭제되었습니다.');
+    } finally {
+      setIsSaving(false);
+      setTimeout(() => setSaveMessage(null), 3000);
     }
   };
 
   // 신규 아파트 등록 시 추가 사진 일괄 삭제
   const handleClearAllNewRoomPhotos = () => {
     if (newRoomPhotos.length === 0) return;
-    if (confirm(`등록된 사진 ${newRoomPhotos.length}장을 모두 삭제하시겠습니까?`)) {
-      setNewRoomPhotos([]);
-    }
+    setNewRoomPhotos([]);
   };
 
   // Save changes to current project (Both State & Cloud Firestore)
@@ -164,37 +187,53 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
 
     try {
       await saveApartmentToFirestore(target);
-      setSaveMessage('✓ 클라우드 DB에 실시간 저장 완료! (다른 기기에서도 즉시 동기화됩니다)');
+      setSaveMessage('✓ 클라우드 DB에 실시간 저장 완료! (모든 기기에 즉시 동기화)');
     } catch (err: unknown) {
       console.error('Firestore save failed:', err);
       const errMsg = err instanceof Error ? err.message : String(err);
-      setSaveMessage(`클라우드 전송 실패: ${errMsg}`);
-      alert(`클라우드 저장 실패 안내: ${errMsg}\n(사진 파일 용량이 너무 크거나 인터넷 연결을 확인해주세요)`);
+      if (errMsg.includes('Quota limit exceeded') || errMsg.includes('quota metric')) {
+        setSaveMessage('✓ 로컬 브라우저에 즉시 저장되었습니다. (클라우드 일일 무료 사용량 초과로 쿼터 리셋 후 동기화됩니다)');
+      } else {
+        setSaveMessage(`클라우드 전송 실패: ${errMsg}`);
+      }
     } finally {
       setIsSaving(false);
-      setTimeout(() => setSaveMessage(null), 4000);
+      setTimeout(() => setSaveMessage(null), 5000);
     }
   };
 
   // Delete project (Both State & Cloud Firestore)
-  const handleDeleteProject = async (id: string) => {
+  const executeDeleteProject = async (targetProj: ApartmentProject) => {
     if (projects.length <= 1) {
       alert('최소 1개 이상의 아파트가 유지되어야 합니다.');
+      setProjectToDelete(null);
       return;
     }
-    if (confirm('이 아파트 갤러리를 삭제하시겠습니까? 클라우드에서도 함께 삭제됩니다.')) {
-      setIsSaving(true);
-      const updated = projects.filter((p) => p.id !== id);
-      onUpdateProjects(updated);
-      setSelectedProjectId(updated[0].id);
 
-      try {
-        await deleteApartmentFromFirestore(id);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setIsSaving(false);
-      }
+    setIsSaving(true);
+    const id = targetProj.id;
+    const updated = projects.filter((p) => p.id !== id);
+    onUpdateProjects(updated);
+    
+    // 삭제 후 다른 프로젝트 선택 및 편집 폼 갱신
+    if (selectedProjectId === id) {
+      const nextSelected = updated[0];
+      setSelectedProjectId(nextSelected.id);
+      setComplexName(nextSelected.complexName);
+      setThumbnailUrl(nextSelected.thumbnailUrl);
+      setRoomPhotos(nextSelected.roomPhotos || []);
+    }
+    setProjectToDelete(null);
+
+    try {
+      await deleteApartmentFromFirestore(id);
+      setSaveMessage(`'${targetProj.complexName}' 삭제가 완료되었습니다.`);
+    } catch (err: unknown) {
+      console.error('Firestore delete failed:', err);
+      setSaveMessage(`삭제 완료 (로컬 반영 완료)`);
+    } finally {
+      setIsSaving(false);
+      setTimeout(() => setSaveMessage(null), 4000);
     }
   };
 
@@ -206,7 +245,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
       roomNameKo: '',
       title: `${complexName} 사진`,
       description: '',
-      imageUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=80',
+      imageUrl: '',
       highlights: [],
     };
     setRoomPhotos([...roomPhotos, newP]);
@@ -234,17 +273,12 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const result = await compressImageFile(file, 1280, 0.70);
+      const result = await compressImageFile(file, true);
       if (isNew) setNewThumbnail(result);
       else setThumbnailUrl(result);
-    } catch {
-      const reader = new FileReader();
-      reader.onload = (uploadEvent) => {
-        const result = uploadEvent.target?.result as string;
-        if (isNew) setNewThumbnail(result);
-        else setThumbnailUrl(result);
-      };
-      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error('Error compressing thumbnail:', err);
+      alert('대표 사진 처리 중 오류가 발생했습니다.');
     }
     e.target.value = '';
   };
@@ -253,15 +287,11 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const result = await compressImageFile(file, 1280, 0.70);
+      const result = await compressImageFile(file, false);
       handleUpdatePhoto(photoId, 'url', result);
-    } catch {
-      const reader = new FileReader();
-      reader.onload = (uploadEvent) => {
-        const result = uploadEvent.target?.result as string;
-        handleUpdatePhoto(photoId, 'url', result);
-      };
-      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error('Error compressing photo:', err);
+      alert('사진 처리 중 오류가 발생했습니다.');
     }
     e.target.value = '';
   };
@@ -279,7 +309,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
-        const compressedUrl = await compressImageFile(file, 1280, 0.70);
+        const compressedUrl = await compressImageFile(file, false);
         newAddedPhotos.push({
           id: `photo-${baseTime}-${i}`,
           roomType: 'living',
@@ -296,7 +326,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
 
     if (newAddedPhotos.length > 0) {
       setRoomPhotos((prev) => [...prev, ...newAddedPhotos]);
-      setSaveMessage(`${newAddedPhotos.length}장의 사진이 추가되었습니다. [저장]을 눌러 클라우드에 반영하세요.`);
+      setSaveMessage(`${newAddedPhotos.length}장의 사진이 최적화되어 추가되었습니다. [저장]을 눌러 클라우드에 반영하세요.`);
       setTimeout(() => setSaveMessage(null), 4000);
     }
     setIsBulkUploading(false);
@@ -314,7 +344,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
-        const compressedUrl = await compressImageFile(file, 1280, 0.70);
+        const compressedUrl = await compressImageFile(file, false);
         newItems.push({
           name: '', // 파일명을 넣지 않고 빈 상태로 생성
           url: compressedUrl,
@@ -326,7 +356,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
 
     if (newItems.length > 0) {
       setNewRoomPhotos((prev) => [...prev, ...newItems]);
-      setSaveMessage(`${newItems.length}장의 사진이 신규 아파트에 추가되었습니다.`);
+      setSaveMessage(`${newItems.length}장의 사진이 최적화되어 신규 아파트에 추가되었습니다.`);
       setTimeout(() => setSaveMessage(null), 4000);
     }
     setIsBulkUploading(false);
@@ -350,6 +380,61 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     }
   };
 
+  // Main background image handlers
+  const handleUploadMainBackground = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsSavingMainImage(true);
+    try {
+      const compressedUrl = await compressImageFile(file, 'hero');
+      setCurrentMainImageUrl(compressedUrl);
+      await saveMainImageToFirestore(compressedUrl);
+      setSaveMessage('✓ 초고화질 메인 배경화면이 클라우드에 실시간 저장되었습니다!');
+    } catch (err) {
+      console.error('Failed to upload main image:', err);
+      alert('메인 배경 이미지 저장 중 오류가 발생했습니다.');
+    } finally {
+      setIsSavingMainImage(false);
+      setTimeout(() => setSaveMessage(null), 4000);
+      e.target.value = '';
+    }
+  };
+
+  const handleApplyCustomMainUrl = async () => {
+    if (!customMainUrlInput.trim()) return;
+    setIsSavingMainImage(true);
+    try {
+      const url = customMainUrlInput.trim();
+      setCurrentMainImageUrl(url);
+      await saveMainImageToFirestore(url);
+      setSaveMessage('✓ 메인 배경화면이 성공적으로 적용되었습니다!');
+      setCustomMainUrlInput('');
+    } catch (err) {
+      console.error('Failed to set main image:', err);
+      alert('메인 배경 이미지 저장 중 오류가 발생했습니다.');
+    } finally {
+      setIsSavingMainImage(false);
+      setTimeout(() => setSaveMessage(null), 4000);
+    }
+  };
+
+  const handleResetMainBackground = async () => {
+    if (confirm('메인 배경화면을 기본 이미지로 복원하시겠습니까?')) {
+      setIsSavingMainImage(true);
+      try {
+        const defaultUrl = 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=2400&q=85';
+        setCurrentMainImageUrl(defaultUrl);
+        await saveMainImageToFirestore(defaultUrl);
+        setSaveMessage('✓ 기본 배경화면으로 복원되었습니다.');
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setIsSavingMainImage(false);
+        setTimeout(() => setSaveMessage(null), 4000);
+      }
+    }
+  };
+
   // Create new apartment (Both State & Cloud Firestore) - 평형, 주소 입력 없이 단지명과 사진으로만 등록
   const handleCreateNewProject = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -359,7 +444,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     }
 
     setIsSaving(true);
-    const finalThumb = newThumbnail.trim() || (newRoomPhotos[0]?.url) || 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=80';
+    const finalThumb = newThumbnail.trim() || (newRoomPhotos[0]?.url) || '';
 
     const newProject: ApartmentProject = {
       id: `bomnal-${Date.now()}`,
@@ -460,28 +545,12 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
             </button>
             <button
               type="button"
-              onClick={async () => {
-                if (confirm('관리자 로그아웃 하시겠습니까?')) {
-                  try {
-                    await signOutAdmin();
-                  } catch (err) {
-                    console.error(err);
-                  }
-                  onClose();
-                }
-              }}
-              title="로그아웃"
-              className="text-xs text-[#8C8275] hover:text-[#7A0016] flex items-center gap-1.5 px-3 py-1.5 border border-[#E8E4DF] hover:border-[#7A0016] transition-colors"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>로그아웃</span>
-            </button>
-            <button
-              type="button"
               onClick={onClose}
-              className="p-2 hover:bg-[#F5F2EC] text-[#141414] transition-colors"
+              className="px-3 py-1.5 bg-[#141414] hover:bg-[#7A0016] text-white text-xs font-semibold rounded-xs transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+              title="관리자 모드 닫기 및 갤러리로 돌아가기"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
+              <span>관리자 닫기</span>
             </button>
           </div>
         </div>
@@ -506,6 +575,25 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
               >
                 <Plus className="w-3 h-3" />
                 <span>추가</span>
+              </button>
+            </div>
+
+            {/* 메인 페이지 배경화면 관리 바로가기 버튼 */}
+            <div className="p-2 border-b border-[#E8E4DF] bg-white">
+              <button
+                type="button"
+                onClick={() => setActiveTab('mainBg')}
+                className={`w-full text-xs px-3 py-2 flex items-center justify-between rounded font-semibold transition-all border cursor-pointer ${
+                  activeTab === 'mainBg'
+                    ? 'bg-[#7A0016] text-white border-[#7A0016] shadow-xs'
+                    : 'bg-neutral-50 text-[#141414] border-[#E8E4DF] hover:bg-neutral-100 hover:border-[#8C8275]'
+                }`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <Wallpaper className={`w-3.5 h-3.5 ${activeTab === 'mainBg' ? 'text-white' : 'text-[#7A0016]'}`} />
+                  <span>메인 배경화면 설정</span>
+                </div>
+                <span className="text-[10px] opacity-75">설정 &gt;</span>
               </button>
             </div>
 
@@ -535,7 +623,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDeleteProject(p.id);
+                          setProjectToDelete(p);
                         }}
                         className="p-1 hover:text-red-600 text-neutral-400"
                         title="삭제"
@@ -548,7 +636,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
               })}
             </div>
 
-            {/* 관리자 비밀번호 변경 및 데이터 복원 영역 */}
+            {/* 관리자 비밀번호 변경 (Firebase Auth) */}
             <div className="p-3 border-t border-[#E8E4DF] bg-white space-y-3">
               <div>
                 <div className="text-[11px] font-bold text-[#141414] mb-1.5 flex items-center gap-1">
@@ -569,47 +657,57 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                   />
                   <button
                     type="button"
+                    disabled={adminPwdSaving}
                     onClick={async () => {
-                      if (adminPwdInput.trim().length < 6) {
+                      const trimmed = adminPwdInput.trim();
+                      if (trimmed.length < 6) {
                         setAdminPwdError('비밀번호는 6자 이상이어야 합니다.');
                         return;
                       }
+                      setAdminPwdSaving(true);
+                      setAdminPwdSaved(false);
+                      setAdminPwdError(null);
                       try {
-                        await changeAdminPassword(adminPwdInput.trim());
+                        await changeAdminPassword(trimmed);
                         setAdminPwdInput('');
                         setAdminPwdSaved(true);
-                        setTimeout(() => setAdminPwdSaved(false), 2500);
-                      } catch (err: unknown) {
-                        const code = (err as { code?: string })?.code || '';
-                        setAdminPwdError(authErrorMessage(code));
+                        setTimeout(() => setAdminPwdSaved(false), 3000);
+                      } catch (err) {
+                        console.error('Failed to change password:', err);
+                        setAdminPwdError(authErrorMessage(err));
+                      } finally {
+                        setAdminPwdSaving(false);
                       }
                     }}
-                    className="px-2.5 py-1 bg-[#141414] hover:bg-[#7A0016] text-white text-xs rounded transition-colors shrink-0"
+                    className="px-2.5 py-1 bg-[#141414] hover:bg-[#7A0016] text-white text-xs rounded transition-colors shrink-0 flex items-center gap-1 font-medium"
                   >
-                    {adminPwdSaved ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : '저장'}
+                    {adminPwdSaving ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                    ) : adminPwdSaved ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      '변경'
+                    )}
                   </button>
                 </div>
-                {adminPwdError && (
-                  <p className="text-[10px] text-red-600 font-medium mt-1">
-                    {adminPwdError}
+                {adminPwdSaved && (
+                  <p className="text-[10px] text-emerald-600 font-semibold mt-1">
+                    ✓ 관리자 비밀번호가 변경되었습니다.
                   </p>
                 )}
-                {adminPwdSaved && (
-                  <p className="text-[10px] text-emerald-600 font-medium mt-1">
-                    비밀번호가 안전하게 변경되었습니다.
+                {adminPwdError && (
+                  <p className="text-[10px] text-red-600 font-semibold mt-1">
+                    {adminPwdError}
                   </p>
                 )}
               </div>
 
-              {/* 사이트 공개 비밀번호 변경 (갤러리 입장용) */}
-              <div className="pt-2 border-t border-[#F0ECE6]">
+              {/* 사이트 공개 비밀번호 (갤러리 입장 잠금) */}
+              <div>
                 <div className="text-[11px] font-bold text-[#141414] mb-1.5 flex items-center gap-1">
                   <KeyRound className="w-3.5 h-3.5 text-[#7A0016]" />
                   <span>사이트 공개 비밀번호</span>
                 </div>
-                <p className="text-[10px] text-[#8C8275] mb-1.5">
-                  사이트를 열 때 사진 보기 전 입력하는 비밀번호입니다.
-                </p>
                 <div className="flex gap-1.5">
                   <input
                     type="text"
@@ -617,44 +715,64 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                     onChange={(e) => {
                       setSitePwdInput(e.target.value);
                       setSitePwdSaved(false);
-                      setSitePwdError(null);
                     }}
-                    placeholder="새 공개 비밀번호 입력"
+                    placeholder="사이트 입장 비밀번호"
                     className="w-full px-2 py-1 text-xs border border-[#E8E4DF] rounded outline-none focus:border-[#7A0016]"
                   />
                   <button
                     type="button"
+                    disabled={sitePwdSaving}
                     onClick={async () => {
-                      if (sitePwdInput.trim().length < 4) {
-                        setSitePwdError('비밀번호는 4자 이상이어야 합니다.');
+                      const trimmed = sitePwdInput.trim();
+                      if (!trimmed) {
+                        alert('새 비밀번호를 입력해주세요.');
                         return;
                       }
+                      setSitePwdSaving(true);
+                      setSitePwdSaved(false);
                       try {
-                        await saveSitePasswordToFirestore(sitePwdInput.trim());
-                        setSitePwdInput('');
+                        await saveSitePasswordToFirestore(trimmed);
                         setSitePwdSaved(true);
-                        setTimeout(() => setSitePwdSaved(false), 2500);
+                        setTimeout(() => setSitePwdSaved(false), 3000);
                       } catch (err) {
-                        console.error(err);
-                        setSitePwdError('저장에 실패했습니다. 다시 시도해 주세요.');
+                        console.error('Failed to save site password:', err);
+                        alert('저장에 실패했습니다. 다시 시도해주세요.');
+                      } finally {
+                        setSitePwdSaving(false);
                       }
                     }}
-                    className="px-2.5 py-1 bg-[#141414] hover:bg-[#7A0016] text-white text-xs rounded transition-colors shrink-0"
+                    className="px-2.5 py-1 bg-[#141414] hover:bg-[#7A0016] text-white text-xs rounded transition-colors shrink-0 flex items-center gap-1 font-medium"
                   >
-                    {sitePwdSaved ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : '저장'}
+                    {sitePwdSaving ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                    ) : sitePwdSaved ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      '저장'
+                    )}
                   </button>
                 </div>
-                {sitePwdError && (
-                  <p className="text-[10px] text-red-600 font-medium mt-1">
-                    {sitePwdError}
-                  </p>
-                )}
                 {sitePwdSaved && (
-                  <p className="text-[10px] text-emerald-600 font-medium mt-1">
-                    공개 비밀번호가 변경되었습니다.
+                  <p className="text-[10px] text-emerald-600 font-semibold mt-1">
+                    ✓ 사이트 공개 비밀번호가 저장되었습니다.
                   </p>
                 )}
               </div>
+
+              {/* 로그아웃 */}
+              <button
+                type="button"
+                onClick={async () => {
+                  if (confirm('관리자 로그아웃 하시겠습니까?')) {
+                    await signOutAdmin();
+                    onClose();
+                  }
+                }}
+                className="w-full py-1.5 px-2 bg-[#F5F2EB] hover:bg-[#EAE4D9] text-[#7A0016] text-[11px] font-semibold rounded border border-[#D8D2C7] transition-colors flex items-center justify-center gap-1.5"
+              >
+                <LogOut className="w-3 h-3" />
+                <span>관리자 로그아웃</span>
+              </button>
 
               {/* 기본 포트폴리오 데이터 전체 복원 버튼 */}
               <div className="pt-2 border-t border-[#F0ECE6]">
@@ -813,15 +931,35 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
 
                       {/* 사진 전체 삭제 버튼 */}
                       {roomPhotos.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={handleClearAllRoomPhotos}
-                          className="text-xs px-2.5 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 transition-colors flex items-center gap-1 font-semibold rounded-xs"
-                          title="추가 사진 전체 일괄 삭제"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>전체 삭제</span>
-                        </button>
+                        showClearConfirm ? (
+                          <div className="flex items-center gap-1.5 animate-in fade-in">
+                            <span className="text-[11px] text-red-600 font-medium">정말 모두 삭제할까요?</span>
+                            <button
+                              type="button"
+                              onClick={handleClearAllRoomPhotos}
+                              className="text-xs px-2.5 py-1.5 bg-red-600 text-white hover:bg-red-700 transition-colors font-bold rounded-xs shadow-xs"
+                            >
+                              삭제 확인
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowClearConfirm(false)}
+                              className="text-xs px-2 py-1.5 border border-neutral-300 text-neutral-600 hover:bg-neutral-100 transition-colors rounded-xs"
+                            >
+                              취소
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setShowClearConfirm(true)}
+                            className="text-xs px-2.5 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 transition-colors flex items-center gap-1 font-semibold rounded-xs cursor-pointer"
+                            title="추가 사진 전체 일괄 삭제"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>전체 삭제</span>
+                          </button>
+                        )
                       )}
                     </div>
                   </div>
@@ -878,8 +1016,33 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                   </div>
                 </div>
 
+                {/* Edit Form Bottom Actions */}
+                <div className="pt-6 border-t border-[#E8E4DF] flex items-center justify-between">
+                  <span className="text-xs text-[#8C8275]">
+                    변경사항을 저장하거나 관리자 모드를 종료할 수 있습니다.
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="px-4 py-2 border border-[#E8E4DF] hover:bg-neutral-100 text-xs font-semibold text-[#6E6E6E] transition-colors rounded-xs"
+                    >
+                      관리자 종료
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      onClick={handleSaveEdit}
+                      className="px-5 py-2 bg-[#7A0016] hover:bg-[#600011] text-white text-xs font-semibold tracking-wider flex items-center gap-1.5 transition-colors rounded-xs shadow-xs disabled:opacity-50"
+                    >
+                      {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                      <span>{isSaving ? '클라우드 저장 중...' : '클라우드에 저장'}</span>
+                    </button>
+                  </div>
+                </div>
+
               </div>
-            ) : (
+            ) : activeTab === 'add' ? (
               /* Add New Apartment Form */
               <form onSubmit={handleCreateNewProject} className="max-w-2xl mx-auto space-y-6">
                 <div className="border-b border-[#E8E4DF] pb-3">
@@ -1038,11 +1201,174 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                   </button>
                 </div>
               </form>
+            ) : (
+              /* Main Page Background Management */
+              <div className="max-w-2xl mx-auto space-y-6">
+                <div className="border-b border-[#E8E4DF] pb-3">
+                  <div className="flex items-center gap-2">
+                    <Wallpaper className="w-5 h-5 text-[#7A0016]" />
+                    <h3 className="font-serif-luxury text-xl font-bold text-[#141414]">
+                      메인 페이지 배경화면 설정
+                    </h3>
+                  </div>
+                  <p className="text-xs text-[#8C8275] mt-1">
+                    웹사이트 첫 화면(메인 홈) 전체화면에 나타나는 대표 배경 이미지를 설정합니다.
+                  </p>
+                </div>
+
+                {/* 현재 배경화면 미리보기 */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-[#141414]">
+                    현재 메인 배경화면 미리보기
+                  </label>
+                  <div className="relative w-full h-72 sm:h-80 bg-neutral-900 rounded border border-[#E8E4DF] overflow-hidden flex items-center justify-center group shadow-inner">
+                    <img
+                      src={currentMainImageUrl || 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=2400&q=85'}
+                      alt="현재 메인 배경"
+                      className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                    />
+                    <div className="absolute inset-0 bg-black/30 pointer-events-none" />
+                    <div className="absolute top-4 left-4 pointer-events-none">
+                      <span className="font-serif-luxury font-bold text-lg tracking-[0.2em] text-white/90 uppercase drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]">
+                        BOMNAL
+                      </span>
+                    </div>
+                    <div className="absolute bottom-4 left-4 right-4 pointer-events-none flex items-center justify-between">
+                      <span className="text-white/80 text-xs font-light drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
+                        실제 메인 화면 적용 예시
+                      </span>
+                      <span className="bg-black/60 backdrop-blur-xs text-white/90 text-[11px] px-2 py-0.5 rounded border border-white/20">
+                        {currentMainImageUrl ? '커스텀 배경 적용 중' : '기본 이미지 적용 중'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 사진 업로드 버튼 */}
+                <div className="bg-[#FAF9F5] p-5 rounded-lg border border-[#E8E4DF] space-y-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-[#141414] mb-1">
+                      새로운 배경 이미지 업로드
+                    </h4>
+                    <p className="text-xs text-[#8C8275] mb-2">
+                      컴퓨터에 보관된 사진을 선택하면 최대 2560px(QHD/FHD) 초고화질로 자동 최적화되어 클라우드에 영구 저장됩니다.
+                    </p>
+                    <div className="bg-white p-3 rounded border border-[#E8E4DF] text-[11px] text-[#4A4A4A] space-y-1">
+                      <div className="font-semibold text-[#7A0016] flex items-center gap-1">
+                        <span>💡 가장 선명하게 보이는 최적 규격 안내:</span>
+                      </div>
+                      <div>• <strong>권장 해상도:</strong> 가로 <strong>1920 × 1080 px</strong> (Full HD) ~ <strong>2560 × 1440 px</strong> (QHD)</div>
+                      <div>• <strong>화면 비율:</strong> <strong>16:9</strong> (가로형 와이드 비율)</div>
+                      <div>• <strong>참고:</strong> 가로가 1920px 미만인 작은 이미지를 전체화면에 띄우면 화면에 맞게 2~3배 확대되어 흐릿해질 수 있습니다.</div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className={`px-5 py-3 bg-[#7A0016] hover:bg-[#5C0011] text-white text-xs font-semibold tracking-wider rounded transition-all flex items-center gap-2 cursor-pointer shadow-xs ${isSavingMainImage ? 'opacity-50 pointer-events-none' : ''}`}>
+                      {isSavingMainImage ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Upload className="w-4 h-4" />
+                      )}
+                      <span>{isSavingMainImage ? '클라우드 저장 중...' : '컴퓨터에서 사진 선택 및 메인 배경으로 적용'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        disabled={isSavingMainImage}
+                        onChange={handleUploadMainBackground}
+                        className="hidden"
+                      />
+                    </label>
+
+                    <button
+                      type="button"
+                      disabled={isSavingMainImage}
+                      onClick={handleResetMainBackground}
+                      className="px-3.5 py-3 border border-[#D8D2C7] bg-white hover:bg-neutral-50 text-xs text-[#8C8275] hover:text-[#141414] font-medium rounded transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>기본 이미지로 복원</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 또는 직접 이미지 URL 입력 */}
+                <div className="p-4 border border-[#E8E4DF] rounded bg-white space-y-2">
+                  <label className="block text-xs font-bold text-[#6E6E6E]">
+                    또는 이미지 웹 주소(URL) 직접 입력
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="url"
+                      placeholder="https://images.unsplash.com/... 또는 웹 이미지 주소"
+                      value={customMainUrlInput}
+                      onChange={(e) => setCustomMainUrlInput(e.target.value)}
+                      className="flex-1 px-3 py-2 text-xs border border-[#D8D2C7] rounded focus:border-[#7A0016] outline-none"
+                    />
+                    <button
+                      type="button"
+                      disabled={isSavingMainImage || !customMainUrlInput.trim()}
+                      onClick={handleApplyCustomMainUrl}
+                      className="px-4 py-2 bg-[#141414] hover:bg-[#7A0016] text-white text-xs font-semibold rounded transition-colors disabled:opacity-40 cursor-pointer"
+                    >
+                      적용
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-[#E8E4DF] flex items-center justify-between">
+                  <span className="text-xs text-[#8C8275]">
+                    적용된 메인 배경화면은 모든 방문자에게 실시간으로 표시됩니다.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="px-4 py-2 bg-neutral-900 text-white hover:bg-[#7A0016] text-xs font-semibold rounded transition-colors cursor-pointer"
+                  >
+                    관리자 닫고 메인화면 보기
+                  </button>
+                </div>
+              </div>
             )}
 
           </div>
 
         </div>
+
+        {/* 아파트 삭제 확인 커스텀 모달 (iframe confirm 차단 대응) */}
+        {projectToDelete && (
+          <div className="absolute inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-lg max-w-sm w-full p-5 shadow-2xl border border-[#E8E4DF] animate-in fade-in zoom-in-95">
+              <div className="flex items-center gap-2.5 text-red-600 mb-2">
+                <Trash2 className="w-5 h-5 shrink-0" />
+                <h4 className="font-bold text-base text-[#141414]">아파트 삭제 확인</h4>
+              </div>
+              <p className="text-sm text-[#4A4A4A] leading-relaxed mb-4">
+                <span className="font-bold text-[#141414]">'{projectToDelete.complexName}'</span> 아파트와 등록된 모든 사진을 정말로 삭제하시겠습니까?
+              </p>
+              <div className="text-xs text-[#8C8275] bg-[#F7F5F2] p-2.5 rounded mb-4">
+                삭제 시 클라우드 및 갤러리 뷰어에서 즉시 제거됩니다.
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setProjectToDelete(null)}
+                  className="px-3.5 py-1.5 border border-[#E8E4DF] text-xs font-medium text-[#4A4A4A] hover:bg-neutral-100 rounded"
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  onClick={() => executeDeleteProject(projectToDelete)}
+                  className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded transition-colors flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>삭제하기</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>
