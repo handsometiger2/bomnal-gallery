@@ -23,44 +23,7 @@ import {
   subscribeAdminPasswordFromFirestore
 } from '../lib/firestoreService';
 import { getStoredAdminPassword, setStoredAdminPassword } from './AdminPasswordModal';
-
-// Helper to compress images so Firestore document size limit (1MB) is never exceeded
-const compressImageFile = (file: File, maxDim = 1280, quality = 0.70): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = reject;
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onerror = reject;
-      img.onload = () => {
-        let width = img.width;
-        let height = img.height;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(e.target?.result as string);
-          return;
-        }
-        ctx.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL('image/jpeg', quality);
-        resolve(dataUrl);
-      };
-      img.src = e.target?.result as string;
-    };
-    reader.readAsDataURL(file);
-  });
-};
+import { compressImageFile } from '../utils/imageCompressor';
 
 interface AdminConsoleModalProps {
   projects: ApartmentProject[];
@@ -293,17 +256,12 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const result = await compressImageFile(file, 1280, 0.70);
+      const result = await compressImageFile(file, true);
       if (isNew) setNewThumbnail(result);
       else setThumbnailUrl(result);
-    } catch {
-      const reader = new FileReader();
-      reader.onload = (uploadEvent) => {
-        const result = uploadEvent.target?.result as string;
-        if (isNew) setNewThumbnail(result);
-        else setThumbnailUrl(result);
-      };
-      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error('Error compressing thumbnail:', err);
+      alert('대표 사진 처리 중 오류가 발생했습니다.');
     }
     e.target.value = '';
   };
@@ -312,15 +270,11 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const result = await compressImageFile(file, 1280, 0.70);
+      const result = await compressImageFile(file, false);
       handleUpdatePhoto(photoId, 'url', result);
-    } catch {
-      const reader = new FileReader();
-      reader.onload = (uploadEvent) => {
-        const result = uploadEvent.target?.result as string;
-        handleUpdatePhoto(photoId, 'url', result);
-      };
-      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error('Error compressing photo:', err);
+      alert('사진 처리 중 오류가 발생했습니다.');
     }
     e.target.value = '';
   };
@@ -338,7 +292,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
-        const compressedUrl = await compressImageFile(file, 1280, 0.70);
+        const compressedUrl = await compressImageFile(file, false);
         newAddedPhotos.push({
           id: `photo-${baseTime}-${i}`,
           roomType: 'living',
@@ -355,7 +309,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
 
     if (newAddedPhotos.length > 0) {
       setRoomPhotos((prev) => [...prev, ...newAddedPhotos]);
-      setSaveMessage(`${newAddedPhotos.length}장의 사진이 추가되었습니다. [저장]을 눌러 클라우드에 반영하세요.`);
+      setSaveMessage(`${newAddedPhotos.length}장의 사진이 최적화되어 추가되었습니다. [저장]을 눌러 클라우드에 반영하세요.`);
       setTimeout(() => setSaveMessage(null), 4000);
     }
     setIsBulkUploading(false);
@@ -373,7 +327,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
-        const compressedUrl = await compressImageFile(file, 1280, 0.70);
+        const compressedUrl = await compressImageFile(file, false);
         newItems.push({
           name: '', // 파일명을 넣지 않고 빈 상태로 생성
           url: compressedUrl,
@@ -385,7 +339,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
 
     if (newItems.length > 0) {
       setNewRoomPhotos((prev) => [...prev, ...newItems]);
-      setSaveMessage(`${newItems.length}장의 사진이 신규 아파트에 추가되었습니다.`);
+      setSaveMessage(`${newItems.length}장의 사진이 최적화되어 신규 아파트에 추가되었습니다.`);
       setTimeout(() => setSaveMessage(null), 4000);
     }
     setIsBulkUploading(false);

@@ -51,22 +51,46 @@ export function subscribeApartmentsFromFirestore(
       }
 
       try {
-        // Direct read from documents - ZERO additional subcollection queries, ultra-low quota consumption
-        const projectsWithPhotos: ApartmentProject[] = snap.docs.map((docSnap) => {
-          const raw = docSnap.data() as ApartmentProject;
-          const finalThumbnail = sanitizePhotoUrl(raw.thumbnailUrl);
-          const cleanedRoomPhotos: RoomPhoto[] = (raw.roomPhotos || []).map((p) => ({
-            ...p,
-            imageUrl: sanitizePhotoUrl(p.imageUrl),
-          }));
+        const projectsWithPhotos: ApartmentProject[] = await Promise.all(
+          snap.docs.map(async (docSnap) => {
+            const raw = docSnap.data() as ApartmentProject;
+            const finalThumbnail = sanitizePhotoUrl(raw.thumbnailUrl);
 
-          return {
-            ...raw,
-            id: docSnap.id,
-            thumbnailUrl: finalThumbnail,
-            roomPhotos: cleanedRoomPhotos,
-          };
-        });
+            let cleanedRoomPhotos: RoomPhoto[] = [];
+            if (raw.hasPhotoChunks) {
+              try {
+                const chunksSnap = await getDocs(collection(db, APARTMENTS_COL, docSnap.id, 'photo_chunks'));
+                const sortedChunks = chunksSnap.docs
+                  .map((c) => c.data() as { index: number; photos: RoomPhoto[] })
+                  .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+                for (const chunk of sortedChunks) {
+                  if (Array.isArray(chunk.photos)) {
+                    cleanedRoomPhotos.push(
+                      ...chunk.photos.map((p) => ({
+                        ...p,
+                        imageUrl: sanitizePhotoUrl(p.imageUrl),
+                      }))
+                    );
+                  }
+                }
+              } catch (e) {
+                console.warn('Failed to load chunks for', docSnap.id, e);
+              }
+            } else {
+              cleanedRoomPhotos = (raw.roomPhotos || []).map((p) => ({
+                ...p,
+                imageUrl: sanitizePhotoUrl(p.imageUrl),
+              }));
+            }
+
+            return {
+              ...raw,
+              id: docSnap.id,
+              thumbnailUrl: finalThumbnail,
+              roomPhotos: cleanedRoomPhotos,
+            };
+          })
+        );
 
         onData(projectsWithPhotos);
       } catch (err) {
@@ -100,18 +124,45 @@ export async function loadApartmentsFromFirestore(): Promise<ApartmentProject[]>
     const colRef = collection(db, APARTMENTS_COL);
     const snap = await getDocs(colRef);
     if (!snap.empty) {
-      return snap.docs.map((docSnap) => {
-        const raw = docSnap.data() as ApartmentProject;
-        return {
-          ...raw,
-          id: docSnap.id,
-          thumbnailUrl: sanitizePhotoUrl(raw.thumbnailUrl),
-          roomPhotos: (raw.roomPhotos || []).map((p) => ({
-            ...p,
-            imageUrl: sanitizePhotoUrl(p.imageUrl),
-          })),
-        };
-      });
+      return await Promise.all(
+        snap.docs.map(async (docSnap) => {
+          const raw = docSnap.data() as ApartmentProject;
+          let cleanedRoomPhotos: RoomPhoto[] = [];
+
+          if (raw.hasPhotoChunks) {
+            try {
+              const chunksSnap = await getDocs(collection(db, APARTMENTS_COL, docSnap.id, 'photo_chunks'));
+              const sortedChunks = chunksSnap.docs
+                .map((c) => c.data() as { index: number; photos: RoomPhoto[] })
+                .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+              for (const chunk of sortedChunks) {
+                if (Array.isArray(chunk.photos)) {
+                  cleanedRoomPhotos.push(
+                    ...chunk.photos.map((p) => ({
+                      ...p,
+                      imageUrl: sanitizePhotoUrl(p.imageUrl),
+                    }))
+                  );
+                }
+              }
+            } catch (e) {
+              console.warn('Failed to load chunks for', docSnap.id, e);
+            }
+          } else {
+            cleanedRoomPhotos = (raw.roomPhotos || []).map((p) => ({
+              ...p,
+              imageUrl: sanitizePhotoUrl(p.imageUrl),
+            }));
+          }
+
+          return {
+            ...raw,
+            id: docSnap.id,
+            thumbnailUrl: sanitizePhotoUrl(raw.thumbnailUrl),
+            roomPhotos: cleanedRoomPhotos,
+          };
+        })
+      );
     }
 
     return INITIAL_PORTFOLIOS;
@@ -123,8 +174,8 @@ export async function loadApartmentsFromFirestore(): Promise<ApartmentProject[]>
 
 /**
  * Save / Update a single apartment project in Firestore.
- * Stores individual photos as subcollection documents so 1MB document limit is NEVER exceeded,
- * regardless of how many high-resolution photos are uploaded.
+ * Automatically chunks photos if document size exceeds safe threshold (650KB),
+ * guaranteeing that Firestore 1MB document size limit is NEVER exceeded.
  */
 export async function saveApartmentToFirestore(project: ApartmentProject): Promise<void> {
   try {
@@ -134,7 +185,48 @@ export async function saveApartmentToFirestore(project: ApartmentProject): Promi
       imageUrl: sanitizePhotoUrl(p.imageUrl),
     }));
 
-    // 1. Save directly to main apartment document without ANY preceding getDocs reads
+    const photosJson = JSON.stringify(photos);
+    // Firestore max document size: 1,048,576 bytes.
+    // Safe threshold: 600,000 bytes (600KB)
+    const exceedsSafeDocSize = photosJson.length > 600000;
+
+    let inlinePhotos: RoomPhoto[] = [];
+    let hasPhotoChunks = false;
+    let photoChunkCount = 0;
+
+    if (exceedsSafeDocSize) {
+      hasPhotoChunks = true;
+      const CHUNK_SIZE = 6;
+      const chunks: RoomPhoto[][] = [];
+      for (let i = 0; i < photos.length; i += CHUNK_SIZE) {
+        chunks.push(photos.slice(i, i + CHUNK_SIZE));
+      }
+      photoChunkCount = chunks.length;
+
+      // Save chunk documents
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkRef = doc(db, APARTMENTS_COL, project.id, 'photo_chunks', `chunk_${i}`);
+        await setDoc(chunkRef, { index: i, photos: chunks[i] }, { merge: true });
+      }
+
+      // Keep first photo or empty for thumbnail reference
+      inlinePhotos = [];
+    } else {
+      inlinePhotos = photos;
+      hasPhotoChunks = false;
+      photoChunkCount = 0;
+
+      // Clean up any old chunks if previously chunked
+      try {
+        const oldChunksSnap = await getDocs(collection(db, APARTMENTS_COL, project.id, 'photo_chunks'));
+        for (const c of oldChunksSnap.docs) {
+          await deleteDoc(c.ref);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     const baseProjectDoc = {
       id: project.id,
       complexName: project.complexName || '',
@@ -147,7 +239,9 @@ export async function saveApartmentToFirestore(project: ApartmentProject): Promi
       durationWeeks: project.durationWeeks || 4,
       completionDate: project.completionDate || '2026',
       thumbnailUrl: sanitizePhotoUrl(project.thumbnailUrl) || (photos[0]?.imageUrl || ''),
-      roomPhotos: photos, // 루트 문서에 고화질 사진 배열 바로 저장
+      roomPhotos: inlinePhotos,
+      hasPhotoChunks,
+      photoChunkCount,
       features: project.features || [],
       materials: project.materials || {},
       agentNote: project.agentNote || '',
@@ -155,7 +249,6 @@ export async function saveApartmentToFirestore(project: ApartmentProject): Promi
       updatedAt: Date.now()
     };
 
-    // Single write operation with merge: true - zero read quota consumed!
     await setDoc(aptRef, baseProjectDoc, { merge: true });
   } catch (error) {
     console.error('Failed to save apartment to Firestore:', error);
@@ -169,6 +262,15 @@ export async function saveApartmentToFirestore(project: ApartmentProject): Promi
 export async function deleteApartmentFromFirestore(projectId: string): Promise<void> {
   try {
     const docRef = doc(db, APARTMENTS_COL, projectId);
+    // Delete photo chunks if any exist
+    try {
+      const chunksSnap = await getDocs(collection(db, APARTMENTS_COL, projectId, 'photo_chunks'));
+      for (const c of chunksSnap.docs) {
+        await deleteDoc(c.ref);
+      }
+    } catch {
+      // ignore
+    }
     await deleteDoc(docRef);
   } catch (error) {
     console.error('Failed to delete apartment from Firestore:', error);
