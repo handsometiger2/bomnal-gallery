@@ -16,13 +16,13 @@ export const INITIAL_PORTFOLIOS: ApartmentProject[] = [
     costMillionWon: 6800,
     durationWeeks: 4,
     completionDate: '2024.11',
-    thumbnailUrl: 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1200&q=80',
+    thumbnailUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1200&q=80',
     beforeAfter: {
       title: '거실 & 주방 구조 변경',
       roomType: 'living',
       beforeImageUrl: 'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=1200&q=80',
       beforeDescription: '체리색 걸레받이 몰딩, 답답한 상부장과 분리형 주방 벽체로 채광 차단 및 좁아보이는 구조',
-      afterImageUrl: 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1200&q=80',
+      afterImageUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1200&q=80',
       afterDescription: '벽체 철거 후 11자 대면형 아일랜드 신설, 천장 무몰딩 평탄화 및 마그네틱 라인조명 시공으로 시각적 개방감 극대화'
     },
     roomPhotos: [
@@ -32,7 +32,7 @@ export const INITIAL_PORTFOLIOS: ApartmentProject[] = [
         roomNameKo: '거실',
         title: '무몰딩 히든도어 일체형 거실',
         description: '벽과 도어가 수평면을 이루는 히든도어 시스템과 바닥 600x1200 대형 포세린 타일로 갤러리 같은 무드 연출',
-        imageUrl: 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1200&q=80',
+        imageUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1200&q=80',
         highlights: ['무몰딩 마감', '대형 포세린 타일', '우물천장 간접등', '시스템 에어컨 단내림']
       },
       {
