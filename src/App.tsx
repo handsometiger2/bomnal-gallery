@@ -23,6 +23,7 @@ import {
   loadApartmentsFromFirestore,
   subscribeApartmentsFromFirestore,
   subscribeAdminPasswordFromFirestore,
+  subscribeMainImageFromFirestore,
   saveApartmentToFirestore,
   BANNED_WOOD_HOUSE_PHOTO
 } from './lib/firestoreService';
@@ -176,6 +177,17 @@ export default function App() {
     return () => {
       unsubscribe();
     };
+  }, []);
+
+  // Main page background image sync with Cloud Firestore
+  const [mainImageUrl, setMainImageUrl] = useState<string>('');
+  useEffect(() => {
+    const unsubMain = subscribeMainImageFromFirestore((cloudMainUrl) => {
+      if (cloudMainUrl) {
+        setMainImageUrl(cloudMainUrl);
+      }
+    });
+    return () => unsubMain();
   }, []);
 
   // Admin password sync with Cloud Firestore
@@ -348,6 +360,7 @@ export default function App() {
       <div className="w-screen min-h-screen bg-[#FDFBF7]">
         <MainOverviewPage
           projects={projects}
+          mainImageUrl={mainImageUrl}
           onSelectProject={(idx) => {
             handleSelectProject(idx);
             setCurrentView('gallery');

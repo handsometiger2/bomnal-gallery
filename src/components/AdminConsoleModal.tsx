@@ -12,7 +12,8 @@ import {
   Loader2,
   KeyRound,
   Check,
-  Images
+  Images,
+  Wallpaper
 } from 'lucide-react';
 import { INITIAL_PORTFOLIOS } from '../data/mockPortfolios';
 import {
@@ -20,7 +21,9 @@ import {
   deleteApartmentFromFirestore,
   syncAllApartmentsToFirestore,
   saveAdminPasswordToFirestore,
-  subscribeAdminPasswordFromFirestore
+  subscribeAdminPasswordFromFirestore,
+  saveMainImageToFirestore,
+  subscribeMainImageFromFirestore
 } from '../lib/firestoreService';
 import { getStoredAdminPassword, setStoredAdminPassword } from './AdminPasswordModal';
 import { compressImageFile } from '../utils/imageCompressor';
@@ -39,9 +42,23 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
   const [selectedProjectId, setSelectedProjectId] = useState<string>(
     projects[0]?.id || ''
   );
-  const [activeTab, setActiveTab] = useState<'edit' | 'add'>('edit');
+  const [activeTab, setActiveTab] = useState<'edit' | 'add' | 'mainBg'>('edit');
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+
+  // Main Page Background Image state
+  const [currentMainImageUrl, setCurrentMainImageUrl] = useState<string>('');
+  const [isSavingMainImage, setIsSavingMainImage] = useState<boolean>(false);
+  const [customMainUrlInput, setCustomMainUrlInput] = useState<string>('');
+
+  useEffect(() => {
+    const unsub = subscribeMainImageFromFirestore((cloudUrl) => {
+      if (cloudUrl) {
+        setCurrentMainImageUrl(cloudUrl);
+      }
+    });
+    return () => unsub();
+  }, []);
 
   // Admin Password Management
   const [adminPwdInput, setAdminPwdInput] = useState<string>(() => getStoredAdminPassword());
@@ -363,6 +380,61 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
     }
   };
 
+  // Main background image handlers
+  const handleUploadMainBackground = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsSavingMainImage(true);
+    try {
+      const compressedUrl = await compressImageFile(file, false);
+      setCurrentMainImageUrl(compressedUrl);
+      await saveMainImageToFirestore(compressedUrl);
+      setSaveMessage('✓ 메인 배경화면이 클라우드에 실시간 저장되었습니다!');
+    } catch (err) {
+      console.error('Failed to upload main image:', err);
+      alert('메인 배경 이미지 저장 중 오류가 발생했습니다.');
+    } finally {
+      setIsSavingMainImage(false);
+      setTimeout(() => setSaveMessage(null), 4000);
+      e.target.value = '';
+    }
+  };
+
+  const handleApplyCustomMainUrl = async () => {
+    if (!customMainUrlInput.trim()) return;
+    setIsSavingMainImage(true);
+    try {
+      const url = customMainUrlInput.trim();
+      setCurrentMainImageUrl(url);
+      await saveMainImageToFirestore(url);
+      setSaveMessage('✓ 메인 배경화면이 성공적으로 적용되었습니다!');
+      setCustomMainUrlInput('');
+    } catch (err) {
+      console.error('Failed to set main image:', err);
+      alert('메인 배경 이미지 저장 중 오류가 발생했습니다.');
+    } finally {
+      setIsSavingMainImage(false);
+      setTimeout(() => setSaveMessage(null), 4000);
+    }
+  };
+
+  const handleResetMainBackground = async () => {
+    if (confirm('메인 배경화면을 기본 이미지로 복원하시겠습니까?')) {
+      setIsSavingMainImage(true);
+      try {
+        const defaultUrl = 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=2400&q=85';
+        setCurrentMainImageUrl(defaultUrl);
+        await saveMainImageToFirestore(defaultUrl);
+        setSaveMessage('✓ 기본 배경화면으로 복원되었습니다.');
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setIsSavingMainImage(false);
+        setTimeout(() => setSaveMessage(null), 4000);
+      }
+    }
+  };
+
   // Create new apartment (Both State & Cloud Firestore) - 평형, 주소 입력 없이 단지명과 사진으로만 등록
   const handleCreateNewProject = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -503,6 +575,25 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
               >
                 <Plus className="w-3 h-3" />
                 <span>추가</span>
+              </button>
+            </div>
+
+            {/* 메인 페이지 배경화면 관리 바로가기 버튼 */}
+            <div className="p-2 border-b border-[#E8E4DF] bg-white">
+              <button
+                type="button"
+                onClick={() => setActiveTab('mainBg')}
+                className={`w-full text-xs px-3 py-2 flex items-center justify-between rounded font-semibold transition-all border cursor-pointer ${
+                  activeTab === 'mainBg'
+                    ? 'bg-[#7A0016] text-white border-[#7A0016] shadow-xs'
+                    : 'bg-neutral-50 text-[#141414] border-[#E8E4DF] hover:bg-neutral-100 hover:border-[#8C8275]'
+                }`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <Wallpaper className={`w-3.5 h-3.5 ${activeTab === 'mainBg' ? 'text-white' : 'text-[#7A0016]'}`} />
+                  <span>메인 배경화면 설정</span>
+                </div>
+                <span className="text-[10px] opacity-75">설정 &gt;</span>
               </button>
             </div>
 
@@ -875,7 +966,7 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                 </div>
 
               </div>
-            ) : (
+            ) : activeTab === 'add' ? (
               /* Add New Apartment Form */
               <form onSubmit={handleCreateNewProject} className="max-w-2xl mx-auto space-y-6">
                 <div className="border-b border-[#E8E4DF] pb-3">
@@ -1034,6 +1125,126 @@ export const AdminConsoleModal: React.FC<AdminConsoleModalProps> = ({
                   </button>
                 </div>
               </form>
+            ) : (
+              /* Main Page Background Management */
+              <div className="max-w-2xl mx-auto space-y-6">
+                <div className="border-b border-[#E8E4DF] pb-3">
+                  <div className="flex items-center gap-2">
+                    <Wallpaper className="w-5 h-5 text-[#7A0016]" />
+                    <h3 className="font-serif-luxury text-xl font-bold text-[#141414]">
+                      메인 페이지 배경화면 설정
+                    </h3>
+                  </div>
+                  <p className="text-xs text-[#8C8275] mt-1">
+                    웹사이트 첫 화면(메인 홈) 전체화면에 나타나는 대표 배경 이미지를 설정합니다.
+                  </p>
+                </div>
+
+                {/* 현재 배경화면 미리보기 */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-[#141414]">
+                    현재 메인 배경화면 미리보기
+                  </label>
+                  <div className="relative w-full h-72 sm:h-80 bg-neutral-900 rounded border border-[#E8E4DF] overflow-hidden flex items-center justify-center group shadow-inner">
+                    <img
+                      src={currentMainImageUrl || 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=2400&q=85'}
+                      alt="현재 메인 배경"
+                      className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                    />
+                    <div className="absolute inset-0 bg-black/30 pointer-events-none" />
+                    <div className="absolute top-4 left-4 pointer-events-none">
+                      <span className="font-serif-luxury font-bold text-lg tracking-[0.2em] text-white/90 uppercase drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]">
+                        BOMNAL
+                      </span>
+                    </div>
+                    <div className="absolute bottom-4 left-4 right-4 pointer-events-none flex items-center justify-between">
+                      <span className="text-white/80 text-xs font-light drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
+                        실제 메인 화면 적용 예시
+                      </span>
+                      <span className="bg-black/60 backdrop-blur-xs text-white/90 text-[11px] px-2 py-0.5 rounded border border-white/20">
+                        {currentMainImageUrl ? '커스텀 배경 적용 중' : '기본 이미지 적용 중'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 사진 업로드 버튼 */}
+                <div className="bg-[#FAF9F5] p-5 rounded-lg border border-[#E8E4DF] space-y-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-[#141414] mb-1">
+                      새로운 배경 이미지 업로드
+                    </h4>
+                    <p className="text-xs text-[#8C8275]">
+                      컴퓨터에 보관된 사진(다운로드한 이미지 등)을 선택하면 고화질로 자동 최적화되어 즉시 클라우드에 영구 저장됩니다.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className={`px-5 py-3 bg-[#7A0016] hover:bg-[#5C0011] text-white text-xs font-semibold tracking-wider rounded transition-all flex items-center gap-2 cursor-pointer shadow-xs ${isSavingMainImage ? 'opacity-50 pointer-events-none' : ''}`}>
+                      {isSavingMainImage ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Upload className="w-4 h-4" />
+                      )}
+                      <span>{isSavingMainImage ? '클라우드 저장 중...' : '컴퓨터에서 사진 선택 및 메인 배경으로 적용'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        disabled={isSavingMainImage}
+                        onChange={handleUploadMainBackground}
+                        className="hidden"
+                      />
+                    </label>
+
+                    <button
+                      type="button"
+                      disabled={isSavingMainImage}
+                      onClick={handleResetMainBackground}
+                      className="px-3.5 py-3 border border-[#D8D2C7] bg-white hover:bg-neutral-50 text-xs text-[#8C8275] hover:text-[#141414] font-medium rounded transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>기본 이미지로 복원</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 또는 직접 이미지 URL 입력 */}
+                <div className="p-4 border border-[#E8E4DF] rounded bg-white space-y-2">
+                  <label className="block text-xs font-bold text-[#6E6E6E]">
+                    또는 이미지 웹 주소(URL) 직접 입력
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="url"
+                      placeholder="https://images.unsplash.com/... 또는 웹 이미지 주소"
+                      value={customMainUrlInput}
+                      onChange={(e) => setCustomMainUrlInput(e.target.value)}
+                      className="flex-1 px-3 py-2 text-xs border border-[#D8D2C7] rounded focus:border-[#7A0016] outline-none"
+                    />
+                    <button
+                      type="button"
+                      disabled={isSavingMainImage || !customMainUrlInput.trim()}
+                      onClick={handleApplyCustomMainUrl}
+                      className="px-4 py-2 bg-[#141414] hover:bg-[#7A0016] text-white text-xs font-semibold rounded transition-colors disabled:opacity-40 cursor-pointer"
+                    >
+                      적용
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-[#E8E4DF] flex items-center justify-between">
+                  <span className="text-xs text-[#8C8275]">
+                    적용된 메인 배경화면은 모든 방문자에게 실시간으로 표시됩니다.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="px-4 py-2 bg-neutral-900 text-white hover:bg-[#7A0016] text-xs font-semibold rounded transition-colors cursor-pointer"
+                  >
+                    관리자 닫고 메인화면 보기
+                  </button>
+                </div>
+              </div>
             )}
 
           </div>
