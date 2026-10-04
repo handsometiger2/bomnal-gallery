@@ -35,7 +35,7 @@ const SITE_UNLOCK_KEY = 'bomnal_site_unlocked';
 
 export default function App() {
   // Navigation view mode: 'home' (메인페이지) | 'gallery' (전체화면 사진 뷰어)
-  const [currentView, setCurrentView] = useState<'home' | 'gallery'>('gallery');
+  const [currentView, setCurrentView] = useState<'home' | 'gallery'>('home');
 
   const [projects, setProjects] = useState<ApartmentProject[]>(() => {
     try {
