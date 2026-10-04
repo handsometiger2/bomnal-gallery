@@ -18,8 +18,9 @@ export const MainOverviewPage: React.FC<MainOverviewPageProps> = ({
   // 메인 단일 대표 이미지
   const displayImage =
     mainImageUrl ||
-    projects[0]?.thumbnailUrl ||
-    'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=2400&q=85';
+    (projects[0]?.thumbnailUrl && !projects[0].thumbnailUrl.includes('photo-1618221195710-dd6b41faaea6')
+      ? projects[0].thumbnailUrl
+      : 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=2400&q=85');
 
   return (
     <div

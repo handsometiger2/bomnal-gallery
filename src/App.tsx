@@ -179,12 +179,19 @@ export default function App() {
     };
   }, []);
 
-  // Main page background image sync with Cloud Firestore
-  const [mainImageUrl, setMainImageUrl] = useState<string>('');
+  // Main page background image sync with Cloud Firestore & local cache
+  const [mainImageUrl, setMainImageUrl] = useState<string>(() => {
+    return localStorage.getItem('bomnal_main_page_bg_cache') || '';
+  });
   useEffect(() => {
     const unsubMain = subscribeMainImageFromFirestore((cloudMainUrl) => {
       if (cloudMainUrl) {
         setMainImageUrl(cloudMainUrl);
+        try {
+          localStorage.setItem('bomnal_main_page_bg_cache', cloudMainUrl);
+        } catch {
+          // ignore
+        }
       }
     });
     return () => unsubMain();
@@ -217,19 +224,20 @@ export default function App() {
   const currentProject = projects[currentProjectIndex] || projects[0];
 
   // All photos for the currently selected apartment (empty/blank url filter)
-  const rawPhotos = [
-    ...(currentProject.thumbnailUrl
-      ? [{ id: `${currentProject.id}-main`, url: currentProject.thumbnailUrl }]
-      : []),
-    ...(currentProject.roomPhotos || [])
-      .filter((r) => Boolean(r && r.imageUrl && r.imageUrl.trim()))
-      .map((r) => ({
-        id: r.id,
-        url: r.imageUrl,
-      })),
-  ];
+  const validRoomPhotos = (currentProject.roomPhotos || [])
+    .filter((r) => Boolean(r && r.imageUrl && r.imageUrl.trim()))
+    .map((r) => ({
+      id: r.id,
+      url: r.imageUrl,
+    }));
 
-  const allPhotos = rawPhotos;
+  // If apartment has room photos, display roomPhotos directly without injecting old thumbnail
+  const allPhotos =
+    validRoomPhotos.length > 0
+      ? validRoomPhotos
+      : currentProject.thumbnailUrl
+      ? [{ id: `${currentProject.id}-main`, url: currentProject.thumbnailUrl }]
+      : [];
 
   const currentPhoto = allPhotos[photoIndex] || allPhotos[0];
   const totalPhotos = allPhotos.length;
