@@ -3,10 +3,6 @@ import { ApartmentProject } from '../types';
 export const INITIAL_PORTFOLIOS: ApartmentProject[] = [
   {
     id: 'apt-01',
-    refCode: 'CRWSSA0029',
-    cartierCollection: '산토스 드 까르띠에 (Santos de Cartier)',
-    modelEdition: '라지 모델 (34평형)',
-    maisonStory: '1904년 루이 까르띠에가 비행사 산토스 뒤몽을 위해 설계한 최초의 현대식 손목시계처럼, 반포 래미안 원베일리는 기하학적 순수함과 완벽한 비례를 바탕으로 재탄생했습니다. 불필요한 몰딩을 과감히 걷어낸 무문선·히든도어와 84㎡를 가로지르는 2.8m 세라믹 아일랜드는 산토스 베젤의 절제된 볼트 라인을 닮은 건축학적 마스터피스입니다.',
     complexName: 'e편한세상월배',
     subTitle: '무몰딩 히든도어 & 대면형 하이엔드 아일랜드 키친',
     address: '대구광역시 달서구 월성동',
@@ -85,10 +81,6 @@ export const INITIAL_PORTFOLIOS: ApartmentProject[] = [
   },
   {
     id: 'apt-02',
-    refCode: 'CRWSTA0040',
-    cartierCollection: '탱크 머스트 (Tank Must)',
-    modelEdition: '미디엄 모델 (25평형)',
-    maisonStory: '까르띠에 탱크의 순수한 직선 실루엣과 평행한 샤프트처럼, 마래푸 25평형은 발코니를 일체형으로 확장하여 직사각형의 완벽한 개방감을 이끌어냈습니다. 따스한 오크 원목마루와 순백의 디아망 실크 벽지가 조화를 이루며 세월이 흘러도 변치 않는 영원한 클래식을 선사합니다.',
     complexName: '월성삼정그린코아에듀파크',
     subTitle: '화이트 & 내추럴 오크우드 톤온톤 확장형 리모델링',
     address: '대구광역시 달서구 월성동',
@@ -158,10 +150,6 @@ export const INITIAL_PORTFOLIOS: ApartmentProject[] = [
   },
   {
     id: 'apt-03',
-    refCode: 'CRWSPA0013',
-    cartierCollection: '파샤 드 까르띠에 (Pasha de Cartier)',
-    modelEdition: '엑스트라 라지 모델 (48평형)',
-    maisonStory: '웅장하고 당당한 파샤 드 까르띠에의 원형 베젤과 독창적인 힘을 48평 대형 평수에 투영했습니다. 탄천 파노라마 조망과 1200x2600 이태리 라미남 박판 세라믹, 8인용 프라이빗 다이닝 바와 독립형 마스터 스위트룸은 하이엔드 럭셔리 라이프스타일의 정점을 완성합니다.',
     complexName: '월성푸르지오',
     subTitle: '호텔식 마스터베드룸 & 럭셔리 다이닝 프라이빗 하우스',
     address: '대구광역시 달서구 월성동',
@@ -231,10 +219,6 @@ export const INITIAL_PORTFOLIOS: ApartmentProject[] = [
   },
   {
     id: 'apt-04',
-    refCode: 'CRW2PN0007',
-    cartierCollection: '팬더 드 까르띠에 (Panthère de Cartier)',
-    modelEdition: '라지 모델 (32평형)',
-    maisonStory: '팬더의 유연하고 우아한 링크 브레이슬릿처럼, 25년 차 구축 아파트의 낡은 골조를 부드러운 라운드 아치와 유려한 미니멀 화이트 라인으로 탈바꿈시켰습니다. 한강 조망을 액자처럼 담아낸 시스템 단열창과 11자 대면형 주방은 매혹적인 변신의 전형입니다.',
     complexName: '월성월드메르디앙',
     subTitle: '구축 30평대 환골탈태, 한강 조망 극대화 미니멀 화이트',
     address: '대구광역시 달서구 월성동',
@@ -304,10 +288,6 @@ export const INITIAL_PORTFOLIOS: ApartmentProject[] = [
   },
   {
     id: 'apt-05',
-    refCode: 'CRWSSA0030',
-    cartierCollection: '산토스 뒤몽 (Santos-Dumont)',
-    modelEdition: '라지 모델 (39평형)',
-    maisonStory: '도심 속 센트럴파크 호수 조망을 감상할 수 있는 창가 원목 단올림 평상과 차콜 그레이의 절제미. 산토스 뒤몽의 슬림하고 정제된 케이스 프로파일처럼 현대적인 도시 감성과 홈카페의 여유로움을 조화시켰습니다.',
     complexName: '월성협성휴포레',
     subTitle: '어반 모던 그레이 & 시티뷰 홈카페 라운지 인테리어',
     address: '대구광역시 달서구 월성동',
@@ -368,10 +348,6 @@ export const INITIAL_PORTFOLIOS: ApartmentProject[] = [
   },
   {
     id: 'apt-06',
-    refCode: 'CRWSBB0040',
-    cartierCollection: '발롱 블루 드 까르띠에 (Ballon Bleu de Cartier)',
-    modelEdition: '미디엄 모델 (33평형)',
-    maisonStory: '부드러운 조약돌 같은 유려한 곡선과 푸른 카보숑 크라운을 품은 발롱 블루의 로맨티시즘. 우물천장의 부드러운 곡선 코브 간접조명과 웜 크림베이지 톤온톤 배색으로 신혼부부의 안락한 쉼터를 구현했습니다.',
     complexName: '월배아이파크2차',
     subTitle: '신혼부부를 위한 소프트 크림베이지 & 라운드 코브 조명',
     address: '대구광역시 달서구 유천동',

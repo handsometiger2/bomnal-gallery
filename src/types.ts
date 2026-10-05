@@ -25,10 +25,6 @@ export interface BeforeAfterPair {
 
 export interface ApartmentProject {
   id: string;
-  refCode?: string; // 까르띠에 공식 레퍼런스 번호 (예: CRWSSA0029)
-  cartierCollection?: string; // 까르띠에 컬렉션 라인 (예: 산토스 드 까르띠에, 탱크, 팬더)
-  modelEdition?: string; // 에디션 모델 (예: 라지 모델, 미디엄 모델)
-  maisonStory?: string; // 까르띠에 아틀리에 건축 철학 스토리
   complexName: string; // 단지명 (예: 반포 래미안 원베일리)
   subTitle: string; // 요약 타이틀 (예: 무몰딩 히든도어 & 대면형 주방)
   address: string; // 위치 (예: 서울시 서초구 반포동)
